@@ -1,23 +1,56 @@
 import { Injectable } from '@nestjs/common';
 import { CreateResumeDto } from './dto/create-resume.dto';
 import { UpdateResumeDto } from './dto/update-resume.dto';
+import { InjectModel } from '@nestjs/mongoose';
+import { Resume, ResumeDocument } from './entities/resume.entity';
+import { Model, Types } from 'mongoose';
 
 @Injectable()
 export class ResumeService {
-  create(createResumeDto: CreateResumeDto) {
-    return 'This action adds a new resume';
+  constructor(
+    @InjectModel(Resume.name) private resumeModel: Model<ResumeDocument>,
+  ) {}
+  async create(userId: string) {
+    return await this.resumeModel.create({
+      userId,
+      user: new Types.ObjectId(userId),
+    });
   }
 
   findAll() {
     return `This action returns all resume`;
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} resume`;
+  async findOne(id: string, userId: string) {
+    const resume = await this.resumeModel.findOne({
+      _id: id,
+      userId,
+    });
+    if (!resume) {
+      throw new Error('简历不存在');
+    }
+    return resume;
   }
 
-  update(id: number, updateResumeDto: UpdateResumeDto) {
-    return `This action updates a #${id} resume`;
+  async update(id: string, updateResumeDto: UpdateResumeDto, userId: string) {
+    const resume = await this.resumeModel.findOne({
+      _id: id,
+      userId,
+    });
+    if (!resume) {
+      throw new Error('简历不存在');
+    }
+
+    return await this.resumeModel.findByIdAndUpdate(
+      id,
+      {
+        ...updateResumeDto,
+        updatedAt: new Date(),
+      },
+      {
+        new: true,
+      },
+    );
   }
 
   remove(id: number) {
