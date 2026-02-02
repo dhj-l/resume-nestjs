@@ -8,7 +8,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // 开启跨域
   app.enableCors();
-  
+
   // 配置静态资源服务
   app.useStaticAssets(join(process.cwd(), 'uploads'), {
     prefix: '/uploads/',

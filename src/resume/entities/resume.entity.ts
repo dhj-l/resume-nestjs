@@ -397,6 +397,7 @@ export class Resume {
    */
   @Prop({ default: false })
   isTemplate: boolean;
+
   /**
    * 简历封面
    */
