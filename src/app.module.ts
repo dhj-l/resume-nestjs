@@ -10,6 +10,7 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { UploadModule } from './common/upload/upload.module';
+import { TemplateModule } from './template/template.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { UploadModule } from './common/upload/upload.module';
       global: true,
     }),
     UploadModule,
+    TemplateModule,
   ],
   controllers: [AppController],
   providers: [

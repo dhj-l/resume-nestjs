@@ -193,8 +193,12 @@ export class InternshipExperienceDto {
 
 export class CreateResumeDto {
   @IsString()
-  @IsNotEmpty()
-  title: string;
+  @IsOptional()
+  templateId?: string;
+
+  @IsString()
+  @IsOptional()
+  title?: string;
 
   @ValidateNested()
   @Type(() => GlobalStyleDto)

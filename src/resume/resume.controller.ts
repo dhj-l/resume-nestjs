@@ -12,8 +12,10 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ResumeService } from './resume.service';
+import { CreateResumeDto } from './dto/create-resume.dto';
 import { UpdateResumeDto } from './dto/update-resume.dto';
 import { DownloadResumeDto } from './dto/download-resume.dto';
+import { CopyResumeDto } from './dto/copy-resume.dto';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 
 @Controller('resume')
@@ -41,13 +43,12 @@ export class ResumeController {
 
   /**
    * 创建简历
-   * TODO 创建不需要很多参数，默认值就好
-   * 后续根据模板Id来创建
+   * 支持根据模板 ID 创建或创建空白简历
    */
   @Post()
-  create(@Req() req) {
+  create(@Body() createResumeDto: CreateResumeDto, @Req() req) {
     const { userId } = req.user;
-    return this.resumeService.create(userId);
+    return this.resumeService.create(userId, createResumeDto);
   }
 
   @Get('templates')
@@ -65,6 +66,16 @@ export class ResumeController {
   findOne(@Param('id') id: string, @Req() req) {
     const { userId } = req.user;
     return this.resumeService.findOne(id, userId);
+  }
+
+  /**
+   * 复制简历
+   * 根据简历 ID 复制当前用户的简历，返回新简历
+   */
+  @Post(':id/copy')
+  copy(@Param('id') id: string, @Body() body: CopyResumeDto, @Req() req) {
+    const { userId } = req.user;
+    return this.resumeService.copy(id, userId, body?.title);
   }
 
   @Patch(':id')

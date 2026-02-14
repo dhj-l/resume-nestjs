@@ -12,6 +12,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { User, UserDocument } from './entities/user.entity';
 import { LoginDto } from './dto/login-dto';
 import { JwtService } from '@nestjs/jwt';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Injectable()
 export class UserService {
@@ -105,5 +106,78 @@ export class UserService {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
     return deletedUser;
+  }
+
+  /**
+   * 获取当前用户信息
+   * @param userId 当前登录用户 ID
+   */
+  async getProfile(userId: string): Promise<User> {
+    return this.findOne(userId);
+  }
+
+  /**
+   * 更新当前用户信息（不允许直接修改密码）
+   * @param userId 当前登录用户 ID
+   * @param updateUserDto 更新字段（可包含 username/email）
+   */
+  async updateProfile(
+    userId: string,
+    updateUserDto: UpdateUserDto,
+  ): Promise<User> {
+    // 不允许在该接口修改密码，需走修改密码专用接口
+    if (updateUserDto.password) {
+      throw new BadRequestException('请使用修改密码接口');
+    }
+
+    // 唯一性检查 - 邮箱
+    if (updateUserDto.email) {
+      const exists = await this.userModel
+        .findOne({ email: updateUserDto.email })
+        .exec();
+      if (exists && exists._id.toString() !== userId) {
+        throw new ConflictException('邮箱已被占用');
+      }
+    }
+    // 唯一性检查 - 用户名
+    if (updateUserDto.username) {
+      const exists = await this.userModel
+        .findOne({ username: updateUserDto.username })
+        .exec();
+      if (exists && exists._id.toString() !== userId) {
+        throw new ConflictException('用户名已被占用');
+      }
+    }
+
+    const updated = await this.userModel
+      .findByIdAndUpdate(userId, updateUserDto, { new: true })
+      .select('-password')
+      .exec();
+    if (!updated) {
+      throw new NotFoundException('用户不存在');
+    }
+    return updated;
+  }
+
+  /**
+   * 修改密码（需校验旧密码）
+   * @param userId 当前登录用户 ID
+   * @param dto 包含旧密码与新密码
+   */
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const match = await bcrypt.compare(dto.oldPassword, user.password);
+    if (!match) {
+      throw new BadRequestException('旧密码不正确');
+    }
+
+    const hashed = await bcrypt.hash(dto.newPassword, 10);
+    await this.userModel.findByIdAndUpdate(userId, { password: hashed }).exec();
+
+    return { message: '密码修改成功' };
   }
 }
