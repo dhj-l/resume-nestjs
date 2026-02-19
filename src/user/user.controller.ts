@@ -41,10 +41,15 @@ export class UserController {
     return this.userService.findAll();
   }
 
+  // 修改密码（校验旧密码）
   @UseGuards(JwtAuthGuard)
-  @Get(':id')
-  async findOne(@Param('id') id: string) {
-    return this.userService.findOne(id);
+  @Patch('change-password')
+  async changePassword(
+    @Req() req: RequestWithUser,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    const { userId } = req.user;
+    return this.userService.changePassword(userId, dto);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -77,15 +82,9 @@ export class UserController {
     const { userId } = req.user;
     return this.userService.updateProfile(userId, updateUserDto);
   }
-
-  // 修改密码（校验旧密码）
   @UseGuards(JwtAuthGuard)
-  @Patch('change-password')
-  async changePassword(
-    @Req() req: RequestWithUser,
-    @Body() dto: ChangePasswordDto,
-  ) {
-    const { userId } = req.user;
-    return this.userService.changePassword(userId, dto);
+  @Get(':id')
+  async findOne(@Param('id') id: string) {
+    return this.userService.findOne(id);
   }
 }

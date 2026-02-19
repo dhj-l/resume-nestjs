@@ -256,4 +256,9 @@ export class CreateResumeDto {
   @IsString()
   @IsOptional()
   selfEvaluation: string;
+  /**
+   * 简历模板类型
+   */
+  @IsString()
+  type: string;
 }

@@ -117,11 +117,14 @@ export class ResumeService {
       if (!resumeData) {
         throw new NotFoundException('模板关联的简历原始数据已丢失');
       }
-      console.log(resumeData);
 
       // 3. 创建新简历，并将所有权归属于当前用户，同时标记为非模板
       return await this.resumeModel.create({
         ...resumeData,
+        /**
+         * 简历类型
+         */
+        type: resumeData.type || 'default',
         title: title || `${resumeData.title} (副本)`,
         userId,
         user: new Types.ObjectId(userId),
@@ -145,7 +148,18 @@ export class ResumeService {
    * 查找用户所有非模板简历
    */
   async findAll(userId: string) {
-    return await this.resumeModel.find({ userId, isTemplate: false }).exec();
+    return await this.resumeModel
+      .find({ userId, isTemplate: false })
+      .select([
+        '_id',
+        'userId',
+        'title',
+        'cover',
+        'isTemplate',
+        'createdAt',
+        'updatedAt',
+      ])
+      .exec();
   }
 
   async findOne(id: string, userId: string) {
@@ -160,15 +174,12 @@ export class ResumeService {
   }
 
   async update(id: string, updateResumeDto: UpdateResumeDto, userId: string) {
-    console.log(id);
-    console.log(userId);
-
     const resume = await this.resumeModel.findOne({
       _id: id,
       userId,
     });
     if (!resume) {
-      throw new Error('简历不存在');
+      throw new BadRequestException('简历不存在');
     }
 
     return await this.resumeModel.findByIdAndUpdate(

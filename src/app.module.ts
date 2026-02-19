@@ -11,6 +11,8 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { UploadModule } from './common/upload/upload.module';
 import { TemplateModule } from './template/template.module';
+import { AiModule } from './ai/ai.module';
+import { ResumeAiModule } from './resume-ai/resume-ai.module';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { TemplateModule } from './template/template.module';
     }),
     UploadModule,
     TemplateModule,
+    AiModule,
+    ResumeAiModule,
   ],
   controllers: [AppController],
   providers: [

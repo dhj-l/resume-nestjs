@@ -11,25 +11,25 @@ export class GlobalStyle {
   /**
    * 字体
    */
-  @Prop()
+  @Prop({ default: '14px' })
   fontSize: string;
 
   /**
    * 模块上下间距
    */
-  @Prop()
+  @Prop({ default: '14px' })
   moduleMargin: string;
 
   /**
    * 页面左右间距
    */
-  @Prop()
+  @Prop({ default: '14px' })
   pageMargin: string;
 
   /**
    * 行高
    */
-  @Prop()
+  @Prop({ default: '1' })
   lineHeight: string;
 }
 
@@ -329,7 +329,7 @@ export class Resume {
   /**
    * 简历全局样式配置
    */
-  @Prop({ type: GlobalStyle, default: {} })
+  @Prop({ type: GlobalStyle })
   globalStyle: GlobalStyle;
 
   /**
@@ -403,6 +403,11 @@ export class Resume {
    */
   @Prop({ default: '' })
   cover: string;
+  /**
+   * 简历类型
+   */
+  @Prop({ default: 'default' })
+  type: string;
 }
 
 export const ResumeSchema = SchemaFactory.createForClass(Resume);

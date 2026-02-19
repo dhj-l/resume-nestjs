@@ -252,4 +252,16 @@ export class UpdateResumeDto {
   @IsString()
   @IsOptional()
   selfEvaluation: string;
+  /**
+   * 简历类型
+   */
+  @IsString()
+  @IsOptional()
+  type: string;
+  /**
+   * 简历封面
+   */
+  @IsString()
+  @IsOptional()
+  cover: string;
 }
