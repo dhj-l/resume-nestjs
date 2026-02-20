@@ -5,6 +5,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ResumeAi, ResumeAiSchema } from './entities/resume-ai.entity';
 import { AiModule } from 'src/ai/ai.module';
 import { Resume, ResumeSchema } from 'src/resume/entities/resume.entity';
+import { DocumentParserService } from './document-parser.service';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -17,6 +18,7 @@ import { Resume, ResumeSchema } from 'src/resume/entities/resume.entity';
     AiModule,
   ],
   controllers: [ResumeAiController],
-  providers: [ResumeAiService],
+  providers: [ResumeAiService, DocumentParserService],
+  exports: [DocumentParserService],
 })
 export class ResumeAiModule {}

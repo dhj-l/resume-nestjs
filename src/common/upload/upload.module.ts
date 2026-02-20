@@ -5,6 +5,7 @@ import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { ResumeAiModule } from 'src/resume-ai/resume-ai.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { existsSync, mkdirSync } from 'fs';
         },
       }),
     }),
+    ResumeAiModule,
   ],
   controllers: [UploadController],
   providers: [UploadService],

@@ -13,6 +13,7 @@ import { AiService } from 'src/ai/ai.service';
 import { JsonOutputParser } from '@langchain/core/output_parsers';
 import { Resume } from 'src/resume/entities/resume.entity';
 import { CreateResumeDto } from 'src/resume/dto/create-resume.dto';
+import { DocumentParserService } from './document-parser.service';
 
 @Injectable()
 export class ResumeAiService {
@@ -20,6 +21,7 @@ export class ResumeAiService {
     @InjectModel(ResumeAi.name) private resumeAiModel: Model<ResumeAi>,
     @InjectModel(Resume.name) private resumeModel: Model<Resume>,
     private readonly aiService: AiService,
+    private readonly documentParserService: DocumentParserService,
   ) {}
   /**
    * 入口函数
@@ -30,11 +32,52 @@ export class ResumeAiService {
       case ResumeAiTypeEnum.Manual:
         return await this.generateManualResume(createAiResuemDto, userId);
       case ResumeAiTypeEnum.Upload:
-        return 'upload resume';
+        return await this.generateUploadResume(createAiResuemDto, userId);
       case ResumeAiTypeEnum.Select:
         return await this.generateSelectResume(createAiResuemDto, userId);
       default:
         throw new BadRequestException('Invalid resume type');
+    }
+  }
+
+  /**
+   * 上传简历生成
+   */
+  async generateUploadResume(
+    createAiResuemDto: CreateAiResuemDto,
+    userId: string,
+  ) {
+    //检查当前用户是否存在正在创建的简历
+    await this.checkExistResume(userId);
+    const { resumeContent, jobDescription } = createAiResuemDto;
+    //创建记录
+    const record = await this.createRecord(userId, {
+      ...createAiResuemDto,
+      resumeContent,
+    });
+    try {
+      const res = await this.createResumeByAi(jobDescription, resumeContent!);
+      //修改状态
+      await this.updateRecordStatus(
+        record._id.toString(),
+        ResumeAiStatusEnum.Completed,
+      );
+      record.generatedResumeDescription = res.generatedResumeDescription;
+      await record.save();
+      //根据res创建简历
+      const resume = await this.createResume(
+        res as CreateResumeDto,
+        record.templateType,
+        userId,
+      );
+      return resume;
+    } catch (error) {
+      // 捕获异常，更新记录状态为失败
+      await this.updateRecordStatus(
+        record._id.toString(),
+        ResumeAiStatusEnum.Failed,
+      );
+      throw new BadRequestException('ai创建简历失败');
     }
   }
 
@@ -60,7 +103,8 @@ export class ResumeAiService {
     if (!resume) {
       throw new BadRequestException('不存在该简历');
     }
-    const content = JSON.stringify(resume);
+    const content = this.parseSupplementary(resume.toObject());
+
     //创建记录
     const record = await this.createRecord(userId, {
       ...createAiResuemDto,
@@ -73,6 +117,11 @@ export class ResumeAiService {
         record._id.toString(),
         ResumeAiStatusEnum.Completed,
       );
+      record.generatedResumeDescription = res.generatedResumeDescription;
+
+      await record.save();
+      // 保存记录
+      await record.save();
       //根据res创建简历
       const resume = await this.createResume(
         res as CreateResumeDto,
@@ -113,7 +162,6 @@ export class ResumeAiService {
       const res = await this.createResumeByAi(jobDescription!, content);
       // 更新记录状态为已完成
       await this.updateRecordStatus(id, ResumeAiStatusEnum.Completed);
-      console.log('ai创建简历成功', res);
       record.generatedResumeDescription = res.generatedResumeDescription;
       // 保存记录
       await record.save();
@@ -149,7 +197,13 @@ export class ResumeAiService {
   parseSupplementary(record: Record<string, any>) {
     let content = '';
     for (const key in record) {
-      content += `${key}: ${record[key]}\n`;
+      if (Array.isArray(record[key])) {
+        content += this.parseSupplementary(record[key]) + '\n ';
+      } else if (record[key] !== null && typeof record[key] === 'object') {
+        content += this.parseSupplementary(record[key]) + '\n ';
+      } else {
+        content += `${key}: ${record[key]}\n `;
+      }
     }
     return content;
   }
@@ -210,7 +264,6 @@ export class ResumeAiService {
         experience: content,
         current_date: current,
       });
-      console.log(res);
 
       return res;
     } catch (error) {

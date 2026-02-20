@@ -28,6 +28,14 @@ export class CreateAiResuemDto {
   templateType: string;
 
   /**
+   * 简历内容（当解析类型为 upload 时必填）
+   */
+  @ValidateIf((o) => o.parseType === ResumeAiTypeEnum.Upload)
+  @IsString()
+  @IsNotEmpty()
+  resumeContent?: string;
+
+  /**
    * 详细信息 JSON 字符串（当解析类型为 manual 时必填）
    * 约定结构可参考 DetailInfo 实体定义
    */

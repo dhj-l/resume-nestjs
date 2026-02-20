@@ -1,4 +1,12 @@
-import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CreateAiResuemDto } from './dto/createAiResuem.dto';
@@ -12,7 +20,11 @@ export class ResumeAiController {
     @Body() createAiResuemDto: CreateAiResuemDto,
     @Req() req,
   ) {
-    const { userId } = req.user;
-    return this.resumeAiService.generateResume(createAiResuemDto, userId);
+    try {
+      const { userId } = req.user;
+      return this.resumeAiService.generateResume(createAiResuemDto, userId);
+    } catch (error) {
+      throw new BadRequestException(error.message);
+    }
   }
 }
