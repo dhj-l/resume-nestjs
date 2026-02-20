@@ -75,14 +75,11 @@ export class TemplateService {
   async findOne(id: string) {
     const template = await this.templateModel
       .findById(id)
-      .populate('resume', 'title userId')
+      .populate('resume', 'title userId type')
       .exec();
     if (!template) {
       throw new NotFoundException('模板不存在');
     }
-    console.log(template);
-
-    console.log(template.userId);
 
     const user = await this.userModel
       .findById(template.userId)

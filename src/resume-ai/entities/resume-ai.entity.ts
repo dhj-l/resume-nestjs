@@ -122,7 +122,7 @@ export class ResumeAi {
   /**
    * 生成简历的描述（告诉用户为什么要这么生成）
    */
-  @Prop()
+  @Prop({ default: '' })
   generatedResumeDescription?: string;
   /**
    * 用户id，关联用户

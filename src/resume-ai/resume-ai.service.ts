@@ -62,8 +62,9 @@ export class ResumeAiService {
         record._id.toString(),
         ResumeAiStatusEnum.Completed,
       );
-      record.generatedResumeDescription = res.generatedResumeDescription;
-      await record.save();
+      //TODO:后续创建专门的函数处理
+      // record.generatedResumeDescription = res.generatedResumeDescription;
+      // await record.save();
       //根据res创建简历
       const resume = await this.createResume(
         res as CreateResumeDto,
@@ -117,9 +118,9 @@ export class ResumeAiService {
         record._id.toString(),
         ResumeAiStatusEnum.Completed,
       );
-      record.generatedResumeDescription = res.generatedResumeDescription;
-
-      await record.save();
+      //TODO:后续创建专门的函数处理
+      // record.generatedResumeDescription = res.generatedResumeDescription;
+      // await record.save();
       // 保存记录
       await record.save();
       //根据res创建简历
@@ -162,9 +163,10 @@ export class ResumeAiService {
       const res = await this.createResumeByAi(jobDescription!, content);
       // 更新记录状态为已完成
       await this.updateRecordStatus(id, ResumeAiStatusEnum.Completed);
-      record.generatedResumeDescription = res.generatedResumeDescription;
-      // 保存记录
-      await record.save();
+      //TODO:后续创建专门的函数处理
+      // record.generatedResumeDescription = res.generatedResumeDescription;
+      // // 保存记录
+      // await record.save();
       //根据res创建简历
       const resume = await this.createResume(
         res as CreateResumeDto,
