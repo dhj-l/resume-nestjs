@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { UpdateResumeDto } from './dto/update-resume.dto';
 import { DownloadResumeDto } from './dto/download-resume.dto';
@@ -14,21 +15,30 @@ import {
 } from '../template/entities/template.entity';
 import { Model, Types } from 'mongoose';
 import puppeteer from 'puppeteer';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 @Injectable()
-export class ResumeService {
+export class ResumeService implements OnModuleInit {
+  private tailwindScript: string;
+
   constructor(
     @InjectModel(Resume.name) private resumeModel: Model<ResumeDocument>,
     @InjectModel(Template.name) private templateModel: Model<TemplateDocument>,
   ) {}
 
-  private getContent(html: string, css: string, url: string) {
+  onModuleInit() {
+    const tailwindPath = join(__dirname, '..', 'assets', 'tailwind.browser.js');
+    this.tailwindScript = readFileSync(tailwindPath, 'utf-8');
+  }
+
+  private getContent(html: string, css: string) {
     return `
         <!DOCTYPE html>
         <html>
           <head>
             <meta charset="UTF-8">
-            <script src="${url}"></script>
+            <script>${this.tailwindScript}</script>
             <style>
               html, body {
                 margin: 0;
@@ -59,28 +69,25 @@ export class ResumeService {
     try {
       const page = await browser.newPage();
 
-      // 组合 HTML 和 CSS
-      // 为了确保样式正确应用，我们将 CSS 放入 head 标签中
-      // 注入 Tailwind CSS CDN 以支持 Tailwind 类名
-      const content = this.getContent(
-        html,
-        css,
-        'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4',
-      );
+      const content = this.getContent(html, css);
 
       await page.setContent(content, {
-        waitUntil: 'networkidle0', // 等待网络空闲，确保资源加载完成（包括 Tailwind CDN 脚本执行）
+        waitUntil: 'domcontentloaded',
+      });
+
+      await page.waitForFunction(() => {
+        return document.readyState === 'complete';
       });
 
       // 生成 PDF
       const pdfBuffer = await page.pdf({
         format: 'A4',
-        printBackground: true, // 打印背景颜色/图片
+        printBackground: true,
         margin: {
-          top: '10mm',
-          right: '10mm',
-          bottom: '10mm',
-          left: '10mm',
+          top: '0mm',
+          right: '0mm',
+          bottom: '0mm',
+          left: '0mm',
         },
       });
 

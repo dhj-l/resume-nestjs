@@ -14,6 +14,19 @@ import { JsonOutputParser } from '@langchain/core/output_parsers';
 import { Resume } from 'src/resume/entities/resume.entity';
 import { CreateResumeDto } from 'src/resume/dto/create-resume.dto';
 import { DocumentParserService } from './document-parser.service';
+import {
+  MIN_LENGTH,
+  MAX_LENGTH,
+  MIN_CHINESE_LENGTH,
+  MIN_ENGLISH_LENGTH,
+  MIN_PARAGRAPHS,
+  MIN_LINE_BREAKS,
+  JD_KEYWORD_GROUPS,
+  JD_REQUIRED_KEYWORD_COUNT,
+  PROHIBITED_TERMS,
+  VALIDATION_MESSAGES,
+  matchKeywordGroup,
+} from './constants/job-validation.constants';
 
 @Injectable()
 export class ResumeAiService {
@@ -27,7 +40,14 @@ export class ResumeAiService {
    * 入口函数
    */
   async generateResume(createAiResuemDto: CreateAiResuemDto, userId: string) {
-    const { parseType } = createAiResuemDto;
+    const { parseType, jobDescription } = createAiResuemDto;
+    const { isValid, reason, score } =
+      this.validateJobDescription(jobDescription);
+    console.log(score);
+
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
     switch (parseType) {
       case ResumeAiTypeEnum.Manual:
         return await this.generateManualResume(createAiResuemDto, userId);
@@ -257,6 +277,7 @@ export class ResumeAiService {
     try {
       const propmt = PromptTemplate.fromTemplate(resumeAiPrompt);
       const model = this.aiService.generateResume();
+      // const model = this.aiService.generateResumeDeepSeek();
       const parser = new JsonOutputParser();
       const chain = propmt.pipe(model).pipe(parser);
       const date = new Date();
@@ -269,6 +290,7 @@ export class ResumeAiService {
 
       return res;
     } catch (error) {
+      console.log(error);
       throw new BadRequestException('ai创建简历失败');
     }
   }
@@ -287,5 +309,105 @@ export class ResumeAiService {
       user: new Types.ObjectId(userId),
     });
     return res;
+  }
+
+  /**
+   * 校验 JD - 通用版本，支持中英文混合、全岗位类型
+   * @param jobDescription 岗位描述
+   * @param language 返回消息的语言 ('CN' | 'EN')，默认 'CN'
+   */
+  validateJobDescription(
+    jobDescription: string,
+    language: 'CN' | 'EN' = 'CN',
+  ): { isValid: boolean; reason: string; errors: string[]; score: number } {
+    const errors: string[] = [];
+    const messages = VALIDATION_MESSAGES[language];
+    let score = 0;
+
+    const length = jobDescription.length;
+
+    if (length > MAX_LENGTH) {
+      errors.push(messages.tooLong);
+      return {
+        isValid: false,
+        reason: messages.tooLong,
+        errors,
+        score: 0,
+      };
+    }
+
+    const chineseCharCount = (jobDescription.match(/[\u4e00-\u9fa5]/g) || [])
+      .length;
+    const isChineseDominant = chineseCharCount > length * 0.3;
+    const effectiveMinLength = isChineseDominant
+      ? MIN_CHINESE_LENGTH
+      : MIN_ENGLISH_LENGTH;
+
+    if (length < effectiveMinLength) {
+      errors.push(messages.tooShort);
+    } else {
+      score += 20;
+    }
+
+    const paragraphs = jobDescription
+      .split(/\n\s*\n/)
+      .filter((p) => p.trim().length > 0);
+    const lineBreaks = (jobDescription.match(/\n/g) || []).length;
+
+    if (paragraphs.length < MIN_PARAGRAPHS && lineBreaks < MIN_LINE_BREAKS) {
+      errors.push(messages.insufficientParagraphs);
+    } else {
+      score += 15;
+    }
+
+    let matchedGroups = 0;
+    const matchedGroupNames: string[] = [];
+
+    for (const group of JD_KEYWORD_GROUPS) {
+      if (matchKeywordGroup(jobDescription, group)) {
+        matchedGroups++;
+        matchedGroupNames.push(group.name);
+      }
+    }
+
+    if (matchedGroups >= JD_REQUIRED_KEYWORD_COUNT) {
+      score += Math.min(matchedGroups * 8, 50);
+    } else {
+      errors.push(messages.missingKeywords);
+    }
+
+    let hasDiscriminatoryContent = false;
+    const lowerJD = jobDescription.toLowerCase();
+
+    for (const term of PROHIBITED_TERMS) {
+      if (lowerJD.includes(term.toLowerCase())) {
+        hasDiscriminatoryContent = true;
+        break;
+      }
+    }
+
+    if (!hasDiscriminatoryContent) {
+      score += 15;
+    } else {
+      errors.push(messages.discriminatoryContent);
+    }
+
+    const isValid =
+      errors.length === 0 &&
+      matchedGroups >= JD_REQUIRED_KEYWORD_COUNT &&
+      !hasDiscriminatoryContent;
+
+    const reason = isValid
+      ? language === 'CN'
+        ? 'JD校验通过'
+        : 'Job description validation passed'
+      : errors[0] || 'Unknown error';
+
+    return {
+      isValid,
+      reason,
+      errors,
+      score,
+    };
   }
 }

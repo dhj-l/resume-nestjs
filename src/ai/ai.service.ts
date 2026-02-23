@@ -28,4 +28,15 @@ export class AiService {
     });
     return chat;
   }
+  /**
+   * 简历生成AI模型(深度思考版)
+   */
+  generateResumeDeepSeek() {
+    const chat = this.createDefaultDeepSeek({
+      model: 'deepseek-reasoner',
+      // TODO：先写死，后续从配置文件读取
+      apiKey: 'sk-897b778ecf344a54bb15a4ed4c49db36',
+    });
+    return chat;
+  }
 }

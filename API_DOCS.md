@@ -16,6 +16,7 @@
    - [4.2 简历模块 (Resume)](#42-简历模块-resume)
    - [4.3 模板模块 (Template)](#43-模板模块-template)
    - [4.4 上传模块 (Upload)](#44-上传模块-upload)
+   - [4.5 简历 AI 模块 (Resume AI)](#45-简历-ai-模块-resume-ai)
 5. [错误码说明](#5-错误码说明)
 6. [数据模型](#6-数据模型)
 7. [缺少的接口](#7-缺少的接口)
@@ -498,7 +499,7 @@ curl -X PATCH http://localhost:3000/api/v1/user/change-password \
   }'
 ```
 
-#### 4.1.3 获取所有用户
+#### 4.1.6 获取所有用户
 
 **接口描述**：获取系统中所有用户列表（管理员功能）
 
@@ -547,7 +548,7 @@ curl -X GET http://localhost:3000/api/v1/user \
 
 ---
 
-#### 4.1.4 获取单个用户
+#### 4.1.7 获取单个用户
 
 **接口描述**：根据 ID 获取指定用户信息
 
@@ -600,7 +601,7 @@ curl -X GET http://localhost:3000/api/v1/user/507f1f77bcf86cd799439011 \
 
 ---
 
-#### 4.1.5 更新用户信息
+#### 4.1.8 更新用户信息
 
 **接口描述**：更新指定用户的信息
 
@@ -676,7 +677,7 @@ curl -X PATCH http://localhost:3000/api/v1/user/507f1f77bcf86cd799439011 \
 
 ---
 
-#### 4.1.6 删除用户
+#### 4.1.9 删除用户
 
 **接口描述**：删除指定用户
 
@@ -1635,6 +1636,152 @@ curl -X POST http://localhost:3000/api/v1/upload/image \
   -F "file=@/path/to/image.png"
 ```
 
+#### 4.4.2 解析简历 (Upload Resume)
+
+**接口描述**：上传并解析简历文件，返回解析后的文本内容
+
+**基础信息**
+
+- 接口地址：`/api/v1/upload/resume`
+- 请求方法：`POST`
+- 认证要求：否 (根据控制器代码未见 UseGuards，需确认，代码中无 Guard)
+
+**请求参数**
+
+##### Header
+
+| 参数名       | 类型   | 必填 | 说明                  |
+| ------------ | ------ | ---- | --------------------- |
+| Content-Type | string | 是   | `multipart/form-data` |
+
+##### Body (FormData)
+
+| 参数名 | 类型 | 必填 | 说明     |
+| ------ | ---- | ---- | -------- |
+| file   | File | 是   | 简历文件 |
+
+**响应格式**
+
+##### 成功响应 (200)
+
+```json
+{
+  "code": 200,
+  "message": "操作成功",
+  "data": "解析后的简历文本内容...",
+  "timestamp": "2024-02-13T10:00:00.000Z",
+  "path": "/api/v1/upload/resume"
+}
+```
+
+**cURL 示例**
+
+```bash
+curl -X POST http://localhost:3000/api/v1/upload/resume \
+  -F "file=@/path/to/resume.pdf"
+```
+
+---
+
+### 4.5 简历 AI 模块 (Resume AI)
+
+简历 AI 模块提供基于 AI 的简历生成功能。
+
+#### 4.5.1 生成 AI 简历
+
+**接口描述**：根据提供的职位描述和个人信息生成优化后的简历
+
+**基础信息**
+
+- 接口地址：`/api/v1/resume-ai/generate`
+- 请求方法：`POST`
+- 认证要求：是
+
+**请求参数**
+
+##### Header
+
+| 参数名        | 类型   | 必填 | 说明               |
+| ------------- | ------ | ---- | ------------------ |
+| Authorization | string | 是   | `Bearer {token}`   |
+| Content-Type  | string | 是   | `application/json` |
+
+##### Body
+
+| 参数名         | 类型   | 必填 | 说明                                                                     |
+| -------------- | ------ | ---- | ------------------------------------------------------------------------ |
+| parseType      | enum   | 是   | 解析类型：`upload` (上传), `select` (选择已有), `manual` (手动输入)      |
+| jobDescription | string | 是   | 职位描述 (JD)                                                            |
+| templateType   | string | 是   | 简历模板类型                                                             |
+| resumeContent  | string | 否   | 简历内容 (当 `parseType` 为 `upload` 时必填)                             |
+| detailInfo     | object | 否   | 详细信息 JSON 对象 (当 `parseType` 为 `manual` 时必填)                   |
+| resumeId       | string | 否   | 已存在简历 ID (当 `parseType` 为 `select` 时必填)                        |
+
+**detailInfo 结构**
+
+| 字段名            | 类型   | 说明     |
+| ----------------- | ------ | -------- |
+| name              | string | 姓名     |
+| age               | number | 年龄     |
+| education         | string | 学历     |
+| school            | string | 学校     |
+| major             | string | 专业     |
+| targetRole        | string | 目标岗位 |
+| yearsOfExperience | string | 工作经验 |
+| supplementary     | string | 补充信息 |
+
+**请求示例**
+
+```json
+{
+  "parseType": "manual",
+  "jobDescription": "高级前端开发工程师...",
+  "templateType": "default",
+  "detailInfo": {
+    "name": "张三",
+    "age": 28,
+    "education": "本科",
+    "school": "某大学",
+    "major": "计算机科学",
+    "targetRole": "前端开发",
+    "yearsOfExperience": "5年",
+    "supplementary": "熟练掌握 Vue3..."
+  }
+}
+```
+
+**响应格式**
+
+##### 成功响应 (200)
+
+```json
+{
+  "code": 200,
+  "message": "操作成功",
+  "data": {
+    "jobDescription": "高级前端开发工程师...",
+    "status": "creating",
+    "templateType": "default",
+    "parseType": "manual",
+    "userId": "507f1f77bcf86cd799439011",
+    "_id": "607f1f77bcf86cd799439099",
+    "createdAt": "2024-02-13T14:00:00.000Z",
+    "updatedAt": "2024-02-13T14:00:00.000Z"
+  },
+  "timestamp": "2024-02-13T14:00:00.000Z",
+  "path": "/api/v1/resume-ai/generate"
+}
+```
+
+**cURL 示例**
+
+```bash
+curl -X POST http://localhost:3000/api/v1/resume-ai/generate \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{ ... }'
+```
+
 ---
 
 ## 5. 错误码说明
@@ -1801,6 +1948,34 @@ curl -X POST http://localhost:3000/api/v1/upload/image \
 | companyName | string | 否   | 公司名称 |
 | position    | string | 否   | 职位     |
 | description | string | 否   | 实习描述 |
+
+### 6.12 DetailInfo (详细信息)
+
+| 字段名            | 类型   | 必填 | 说明     |
+| ----------------- | ------ | ---- | -------- |
+| name              | string | 是   | 姓名     |
+| age               | number | 是   | 年龄     |
+| education         | string | 是   | 学历     |
+| school            | string | 是   | 学校     |
+| major             | string | 是   | 专业     |
+| targetRole        | string | 是   | 目标岗位 |
+| yearsOfExperience | string | 是   | 工作经验 |
+| supplementary     | string | 是   | 补充信息 |
+
+### 6.13 ResumeAi (AI 简历)
+
+| 字段名                     | 类型       | 必填 | 说明                                  |
+| -------------------------- | ---------- | ---- | ------------------------------------- |
+| jobDescription             | string     | 是   | 岗位 JD                               |
+| status                     | string     | 是   | 状态 (creating, completed, failed)    |
+| templateType               | string     | 否   | 简历模板类型                          |
+| parseType                  | string     | 是   | 解析类型 (upload, select, manual)     |
+| resumeContent              | string     | 否   | 简历内容                              |
+| detailInfo                 | DetailInfo | 否   | 详细信息                              |
+| resumeId                   | string     | 否   | 简历 ID                               |
+| generatedResumeId          | string     | 否   | 生成的简历 ID                         |
+| generatedResumeDescription | string     | 否   | 生成简历的描述                        |
+| userId                     | ObjectId   | 是   | 用户 ID                               |
 
 ---
 
