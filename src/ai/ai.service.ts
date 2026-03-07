@@ -23,8 +23,7 @@ export class AiService {
    */
   generateResume() {
     const chat = this.createDefaultDeepSeek({
-      // TODO：先写死，后续从配置文件读取
-      apiKey: 'sk-897b778ecf344a54bb15a4ed4c49db36',
+      apiKey: process.env.DEEPSEEK_API_KEY || '',
     });
     return chat;
   }
@@ -34,8 +33,7 @@ export class AiService {
   generateResumeDeepSeek() {
     const chat = this.createDefaultDeepSeek({
       model: 'deepseek-reasoner',
-      // TODO：先写死，后续从配置文件读取
-      apiKey: 'sk-897b778ecf344a54bb15a4ed4c49db36',
+      apiKey: process.env.DEEPSEEK_API_KEY || '',
     });
     return chat;
   }
