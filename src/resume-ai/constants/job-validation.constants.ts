@@ -17,7 +17,15 @@ export const JD_KEYWORD_GROUPS = [
   },
   {
     name: 'location',
-    keywords: ['工作地点', '地点', '地址', 'location', 'address', '工作城市', 'base地'],
+    keywords: [
+      '工作地点',
+      '地点',
+      '地址',
+      'location',
+      'address',
+      '工作城市',
+      'base地',
+    ],
     synonyms: [
       ['工作地点', '工作城市', '工作地址', '办公地点'],
       ['location', 'work location', 'workplace'],
@@ -25,7 +33,15 @@ export const JD_KEYWORD_GROUPS = [
   },
   {
     name: 'responsibility',
-    keywords: ['岗位职责', '职责', '工作内容', 'responsibilities', 'duties', '工作职责', '岗位描述'],
+    keywords: [
+      '岗位职责',
+      '职责',
+      '工作内容',
+      'responsibilities',
+      'duties',
+      '工作职责',
+      '岗位描述',
+    ],
     synonyms: [
       ['岗位职责', '工作职责', '职责描述', '工作内容', '主要职责'],
       ['responsibilities', 'duties', 'job description', 'key responsibilities'],
@@ -33,15 +49,38 @@ export const JD_KEYWORD_GROUPS = [
   },
   {
     name: 'requirements',
-    keywords: ['任职要求', '要求', '资格', 'requirements', 'qualifications', '任职资格', '招聘要求'],
+    keywords: [
+      '任职要求',
+      '要求',
+      '资格',
+      'requirements',
+      'qualifications',
+      '任职资格',
+      '招聘要求',
+    ],
     synonyms: [
       ['任职要求', '招聘要求', '任职资格', '岗位要求', '应聘要求'],
-      ['requirements', 'qualifications', 'job requirements', 'minimum qualifications'],
+      [
+        'requirements',
+        'qualifications',
+        'job requirements',
+        'minimum qualifications',
+      ],
     ],
   },
   {
     name: 'education',
-    keywords: ['学历', 'education', '学位', 'degree', '本科', '硕士', '博士', '大专', '学历要求'],
+    keywords: [
+      '学历',
+      'education',
+      '学位',
+      'degree',
+      '本科',
+      '硕士',
+      '博士',
+      '大专',
+      '学历要求',
+    ],
     synonyms: [
       ['学历', '学历要求', '教育背景', '最高学历'],
       ['education', 'degree', 'educational background'],
@@ -49,7 +88,17 @@ export const JD_KEYWORD_GROUPS = [
   },
   {
     name: 'salary',
-    keywords: ['薪资', 'salary', '薪酬', '待遇', '工资', '月薪', '年薪', '薪资范围', '薪酬福利'],
+    keywords: [
+      '薪资',
+      'salary',
+      '薪酬',
+      '待遇',
+      '工资',
+      '月薪',
+      '年薪',
+      '薪资范围',
+      '薪酬福利',
+    ],
     synonyms: [
       ['薪资', '薪酬', '工资', '待遇', '薪资待遇'],
       ['salary', 'compensation', 'pay', 'wage'],
@@ -57,7 +106,15 @@ export const JD_KEYWORD_GROUPS = [
   },
   {
     name: 'company',
-    keywords: ['公司', 'company', '企业', 'firm', '公司介绍', '企业介绍', '关于我们'],
+    keywords: [
+      '公司',
+      'company',
+      '企业',
+      'firm',
+      '公司介绍',
+      '企业介绍',
+      '关于我们',
+    ],
     synonyms: [
       ['公司', '企业', '用人单位', '招聘单位'],
       ['company', 'company introduction', 'about us'],
@@ -95,7 +152,10 @@ export const DISCRIMINATORY_TERMS_EN = [
   'age limit',
 ];
 
-export const PROHIBITED_TERMS = [...DISCRIMINATORY_TERMS_CN, ...DISCRIMINATORY_TERMS_EN];
+export const PROHIBITED_TERMS = [
+  ...DISCRIMINATORY_TERMS_CN,
+  ...DISCRIMINATORY_TERMS_EN,
+];
 
 export function levenshteinDistance(a: string, b: string): number {
   const matrix: number[][] = [];
@@ -124,7 +184,11 @@ export function levenshteinDistance(a: string, b: string): number {
   return matrix[b.length][a.length];
 }
 
-export function fuzzyMatch(text: string, keyword: string, maxDistance: number = 2): boolean {
+export function fuzzyMatch(
+  text: string,
+  keyword: string,
+  maxDistance: number = 2,
+): boolean {
   if (text.includes(keyword)) {
     return true;
   }
@@ -147,7 +211,10 @@ export function fuzzyMatch(text: string, keyword: string, maxDistance: number = 
   return false;
 }
 
-export function matchKeywordGroup(text: string, group: (typeof JD_KEYWORD_GROUPS)[0]): boolean {
+export function matchKeywordGroup(
+  text: string,
+  group: (typeof JD_KEYWORD_GROUPS)[0],
+): boolean {
   for (const keyword of group.keywords) {
     if (fuzzyMatch(text, keyword)) {
       return true;
@@ -170,14 +237,19 @@ export const VALIDATION_MESSAGES = {
     tooShort: 'JD内容过短，中文需至少150字符，英文需至少300字符',
     tooLong: `JD内容过长，最大允许${MAX_LENGTH}字符`,
     insufficientParagraphs: 'JD格式异常，需至少包含2个段落或5个换行符',
-    missingKeywords: 'JD缺少必要的关键信息字段（职位、地点、职责、要求、学历、薪资、公司信息等），请补充完善',
+    missingKeywords:
+      'JD缺少必要的关键信息字段（职位、地点、职责、要求、学历、薪资、公司信息等），请补充完善',
     discriminatoryContent: 'JD包含歧视性内容，请修改后重新提交',
   },
   EN: {
-    tooShort: 'Job description is too short. Minimum 150 Chinese characters or 300 English characters required.',
+    tooShort:
+      'Job description is too short. Minimum 150 Chinese characters or 300 English characters required.',
     tooLong: `Job description is too long. Maximum ${MAX_LENGTH} characters allowed.`,
-    insufficientParagraphs: 'Invalid format. At least 2 paragraphs or 5 line breaks required.',
-    missingKeywords: 'Missing essential fields (position, location, responsibilities, requirements, education, salary, company info).',
-    discriminatoryContent: 'Discriminatory content detected. Please revise and resubmit.',
-  }
-}
+    insufficientParagraphs:
+      'Invalid format. At least 2 paragraphs or 5 line breaks required.',
+    missingKeywords:
+      'Missing essential fields (position, location, responsibilities, requirements, education, salary, company info).',
+    discriminatoryContent:
+      'Discriminatory content detected. Please revise and resubmit.',
+  },
+};

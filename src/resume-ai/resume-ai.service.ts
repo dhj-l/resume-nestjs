@@ -204,7 +204,7 @@ export class ResumeAiService {
     const id = record._id.toString();
     try {
       //调用 AI 模型创建简历
-      const res = await this.createResumeByAi(jobDescription!, content);
+      const res = await this.createResumeByAi(jobDescription, content);
       // 更新记录状态为已完成
       await this.updateRecordStatus(id, ResumeAiStatusEnum.Completed);
       //TODO:后续创建专门的函数处理

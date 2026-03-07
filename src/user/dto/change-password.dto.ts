@@ -1,14 +1,20 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsString, MinLength, Matches, IsNotEmpty } from 'class-validator';
 
 /**
  * 修改密码 DTO
- * 需提供旧密码与新密码，新密码最少 6 位
+ * 需提供旧密码与新密码,新密码最少 8 位且包含大小写字母、数字和特殊字符
  */
 export class ChangePasswordDto {
   @IsString()
+  @IsNotEmpty({ message: '请输入旧密码' })
   oldPassword: string;
 
   @IsString()
-  @MinLength(6)
+  @IsNotEmpty({ message: '请输入新密码' })
+  @MinLength(8, { message: '新密码长度至少为8位' })
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
+    message:
+      '新密码必须包含至少一个大写字母、一个小写字母、一个数字和一个特殊字符',
+  })
   newPassword: string;
 }

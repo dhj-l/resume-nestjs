@@ -65,7 +65,9 @@ describe('ResumeAiService - validateResumeContent', () => {
         在校期间成绩优异，获得过多次奖学金。
       `;
 
-      const result = service['validateResumeContent'](resumeWithoutPersonalInfo);
+      const result = service['validateResumeContent'](
+        resumeWithoutPersonalInfo,
+      );
 
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('缺少个人信息（姓名、联系方式等）');
@@ -101,12 +103,16 @@ describe('ResumeAiService - validateResumeContent', () => {
         熟练掌握Vue3、TypeScript、Node.js等技术栈。
       `;
 
-      const result = service['validateResumeContent'](resumeWithoutRequiredFields);
+      const result = service['validateResumeContent'](
+        resumeWithoutRequiredFields,
+      );
 
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('缺少个人信息（姓名、联系方式等）');
       expect(result.errors).toContain('缺少教育背景信息');
-      expect(result.errors).toContain('简历必须同时包含个人信息和教育背景信息才能通过校验');
+      expect(result.errors).toContain(
+        '简历必须同时包含个人信息和教育背景信息才能通过校验',
+      );
       expect(result.details.hasPersonalInfo).toBe(false);
       expect(result.details.hasEducation).toBe(false);
     });
@@ -240,7 +246,9 @@ describe('ResumeAiService - validateResumeContent', () => {
 
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('缺少教育背景信息');
-      expect(result.errors).toContain('简历必须同时包含个人信息和教育背景信息才能通过校验');
+      expect(result.errors).toContain(
+        '简历必须同时包含个人信息和教育背景信息才能通过校验',
+      );
     });
 
     it('应该拒绝只有教育背景的简历', () => {
@@ -255,7 +263,9 @@ describe('ResumeAiService - validateResumeContent', () => {
 
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('缺少个人信息（姓名、联系方式等）');
-      expect(result.errors).toContain('简历必须同时包含个人信息和教育背景信息才能通过校验');
+      expect(result.errors).toContain(
+        '简历必须同时包含个人信息和教育背景信息才能通过校验',
+      );
     });
 
     it('应该拒绝内容过短的简历', () => {
@@ -318,7 +328,8 @@ describe('ResumeAiService - validateResumeContent', () => {
         2020年毕业于上海交通大学。
       `;
 
-      const resultWithoutContact = service['validateResumeContent'](resumeWithoutContact);
+      const resultWithoutContact =
+        service['validateResumeContent'](resumeWithoutContact);
 
       expect(result.score).toBeGreaterThan(resultWithoutContact.score);
     });
