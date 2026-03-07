@@ -423,26 +423,34 @@ export class SelfEvaluation {
 export class Resume {
   /**
    * userId
+   * 添加索引以提高查询性能
    */
-  @Prop({ required: true })
+  @Prop({ required: true, index: true })
   userId: string;
 
   /**
    * user ObjectId
+   * 添加索引以提高查询性能
    */
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true,
+  })
   user: Types.ObjectId;
 
   /**
    * 简历标题
+   * 添加索引以提高搜索性能
    */
-  @Prop({ default: '我的简历' })
+  @Prop({ default: '我的简历', index: true })
   title: string;
 
   /**
    * 简历全局样式配置
    */
-  @Prop({ type: GlobalStyle })
+  @Prop({ type: GlobalStyle, default: {} })
   globalStyle: GlobalStyle;
 
   /**
@@ -507,8 +515,9 @@ export class Resume {
 
   /**
    * 是否为模板
+   * 添加索引以提高查询性能
    */
-  @Prop({ default: false })
+  @Prop({ default: false, index: true })
   isTemplate: boolean;
 
   /**
@@ -516,10 +525,12 @@ export class Resume {
    */
   @Prop({ default: '' })
   cover: string;
+
   /**
    * 简历类型
+   * 添加索引以提高查询性能
    */
-  @Prop({ default: 'default' })
+  @Prop({ default: 'default', index: true })
   type: string;
 }
 

@@ -12,9 +12,5 @@ export class ChangePasswordDto {
   @IsString()
   @IsNotEmpty({ message: '请输入新密码' })
   @MinLength(8, { message: '新密码长度至少为8位' })
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
-    message:
-      '新密码必须包含至少一个大写字母、一个小写字母、一个数字和一个特殊字符',
-  })
   newPassword: string;
 }

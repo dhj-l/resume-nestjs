@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  Logger,
 } from '@nestjs/common';
 import { UpdateResumeDto } from './dto/update-resume.dto';
 import { DownloadResumeDto } from './dto/download-resume.dto';
@@ -26,6 +27,7 @@ type SortableItem = {
 
 @Injectable()
 export class ResumeService implements OnModuleInit {
+  private readonly logger = new Logger(ResumeService.name);
   private tailwindScript: string;
 
   constructor(
@@ -34,10 +36,26 @@ export class ResumeService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    const tailwindPath = join(__dirname, '..', 'assets', 'tailwind.browser.js');
-    this.tailwindScript = readFileSync(tailwindPath, 'utf-8');
+    try {
+      const tailwindPath = join(
+        __dirname,
+        '..',
+        'assets',
+        'tailwind.browser.js',
+      );
+      this.tailwindScript = readFileSync(tailwindPath, 'utf-8');
+      this.logger.log('Tailwind CSS 脚本加载成功');
+    } catch (error) {
+      this.logger.error('加载 Tailwind CSS 脚本失败', (error as Error).stack);
+      throw new Error('初始化失败：无法加载 Tailwind CSS 脚本');
+    }
   }
 
+  /**
+   * 处理排序字段，确保数组中每个元素都有正确的排序值
+   * @param items 需要处理排序的项目数组
+   * @returns 处理后的数组，每个元素都包含 globalSort 和 localSort 字段
+   */
   private processSortFields<T extends SortableItem>(items: T[]): T[] {
     if (!items || !Array.isArray(items)) return items;
 
@@ -48,6 +66,11 @@ export class ResumeService implements OnModuleInit {
     }));
   }
 
+  /**
+   * 为 DTO 中的数组字段添加排序字段
+   * @param dto 创建或更新简历的 DTO
+   * @returns 处理后的 DTO，包含排序字段
+   */
   private enrichWithSortFields(dto: UpdateResumeDto | CreateResumeDto) {
     const result = { ...dto };
 
@@ -106,12 +129,15 @@ export class ResumeService implements OnModuleInit {
    */
   async downloadResume(downloadResumeDto: DownloadResumeDto): Promise<Buffer> {
     const { html, css } = downloadResumeDto;
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
+    let browser: any;
     try {
-      const page = await browser.newPage();
+      this.logger.log('开始生成 PDF 简历');
+      browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      });
+
+      const page: any = await browser.newPage();
 
       const content = this.getContent(html, css);
 
@@ -135,14 +161,24 @@ export class ResumeService implements OnModuleInit {
         },
       });
 
+      this.logger.log('PDF 简历生成成功');
       return Buffer.from(pdfBuffer);
+    } catch (error) {
+      this.logger.error(
+        `生成 PDF 失败: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw new BadRequestException('生成 PDF 失败，请检查 HTML 和 CSS 格式');
     } finally {
-      await browser.close();
+      if (browser) {
+        await browser.close();
+      }
     }
   }
 
   /**
    * 创建简历
+   * 支持根据模板创建或创建空白简历
    * @param userId 当前操作用户的 ID
    * @param createResumeDto 创建简历的 DTO，包含可选的模板 ID 和标题
    * @returns 返回新创建的简历对象
@@ -151,22 +187,29 @@ export class ResumeService implements OnModuleInit {
     const { templateId, title } = createResumeDto;
 
     if (templateId) {
+      this.logger.log(`用户 ${userId} 尝试基于模板 ${templateId} 创建简历`);
+
+      // 查找模板
       const template = await this.templateModel.findById(templateId).exec();
       if (!template) {
+        this.logger.warn(`模板 ${templateId} 不存在`);
         throw new NotFoundException('指定的模板不存在');
       }
 
+      // 获取模板关联的原始简历数据
       const resumeData = await this.resumeModel
         .findById(template.resumeId)
-        .select('-_id -createdAt -updatedAt -__v')
+        .select('-_id -createdAt -updatedAt -__v -user -userId -isTemplate')
         .lean()
         .exec();
 
       if (!resumeData) {
+        this.logger.warn(`模板 ${templateId} 关联的简历数据已丢失`);
         throw new NotFoundException('模板关联的简历原始数据已丢失');
       }
 
-      return await this.resumeModel.create({
+      // 创建新简历
+      const newResume = await this.resumeModel.create({
         ...resumeData,
         type: resumeData.type || 'default',
         title: title || `${resumeData.title} (副本)`,
@@ -174,27 +217,57 @@ export class ResumeService implements OnModuleInit {
         user: new Types.ObjectId(userId),
         isTemplate: false,
       });
+
+      this.logger.log(
+        `用户 ${userId} 基于模板 ${templateId} 成功创建简历: ${newResume._id.toString()}`,
+      );
+      return newResume;
     }
 
+    // 创建空白简历
+    this.logger.log(`用户 ${userId} 创建空白简历`);
     const enrichedDto = this.enrichWithSortFields(createResumeDto);
 
-    return await this.resumeModel.create({
+    const newResume = await this.resumeModel.create({
       title: title || '未命名简历',
       userId,
       user: new Types.ObjectId(userId),
       isTemplate: false,
       ...enrichedDto,
     });
-  }
-  // 查找所有模板
-  async findAllTemplates() {
-    return await this.resumeModel.find({ isTemplate: true }).exec();
+
+    this.logger.log(
+      `用户 ${userId} 成功创建空白简历: ${newResume._id.toString()}`,
+    );
+    return newResume;
   }
   /**
-   * 查找用户所有非模板简历
+   * 查找所有模板简历
+   * 注意：此方法返回所有模板，不进行分页
+   * @returns 所有模板简历列表
+   */
+  async findAllTemplates() {
+    this.logger.log('查询所有模板简历');
+    const templates = await this.resumeModel.find({ isTemplate: true }).exec();
+    this.logger.log(`找到 ${templates.length} 个模板简历`);
+    return templates;
+  }
+
+  /**
+   * 查找用户所有非模板简历（分页）
+   * @param userId 用户 ID
+   * @param query 查询参数，包含分页信息
+   * @returns 简历列表和分页信息
    */
   async findAll(userId: string, query: GetResumeDto) {
-    const { page = 1, pageSize = 6 } = query;
+    // 验证分页参数
+    const page = Math.max(1, query.page || 1);
+    const pageSize = Math.min(100, Math.max(1, query.pageSize || 6));
+
+    this.logger.log(
+      `用户 ${userId} 查询简历列表，页码: ${page}, 每页: ${pageSize}`,
+    );
+
     const res = await this.resumeModel
       .find({ userId, isTemplate: false })
       .select([
@@ -210,10 +283,16 @@ export class ResumeService implements OnModuleInit {
       .limit(pageSize)
       .sort({ createdAt: -1 })
       .exec();
+
     const total = await this.resumeModel.countDocuments({
       userId,
       isTemplate: false,
     });
+
+    this.logger.log(
+      `用户 ${userId} 共有 ${total} 份简历，当前页返回 ${res.length} 份`,
+    );
+
     return {
       list: res,
       total,
@@ -222,29 +301,63 @@ export class ResumeService implements OnModuleInit {
     };
   }
 
+  /**
+   * 查找单个简历
+   * @param id 简历 ID
+   * @param userId 用户 ID，用于权限验证
+   * @returns 简历对象
+   * @throws BadRequestException 当简历不存在或无权访问时
+   */
   async findOne(id: string, userId: string) {
+    this.logger.log(`用户 ${userId} 查询简历 ${id}`);
+
     const resume = await this.resumeModel.findOne({
       _id: id,
       userId,
     });
+
     if (!resume) {
+      this.logger.warn(
+        `用户 ${userId} 查询简历 ${id} 失败：简历不存在或无权访问`,
+      );
       throw new BadRequestException('简历不存在');
     }
+
     return resume;
   }
 
+  /**
+   * 更新简历
+   * @param id 简历 ID
+   * @param updateResumeDto 更新数据
+   * @param userId 用户 ID，用于权限验证
+   * @returns 更新后的简历对象
+   * @throws BadRequestException 当简历不存在或无权访问时
+   */
   async update(id: string, updateResumeDto: UpdateResumeDto, userId: string) {
+    this.logger.log(`用户 ${userId} 更新简历 ${id}`);
+
     const resume = await this.resumeModel.findOne({
       _id: id,
       userId,
     });
+
     if (!resume) {
+      this.logger.warn(
+        `用户 ${userId} 更新简历 ${id} 失败：简历不存在或无权访问`,
+      );
       throw new BadRequestException('简历不存在');
+    }
+
+    // 检查是否为模板，模板不允许更新
+    if (resume.isTemplate) {
+      this.logger.warn(`用户 ${userId} 尝试更新模板简历 ${id}`);
+      throw new BadRequestException('模板简历不允许更新');
     }
 
     const enrichedDto = this.enrichWithSortFields(updateResumeDto);
 
-    return await this.resumeModel.findByIdAndUpdate(
+    const updatedResume = await this.resumeModel.findByIdAndUpdate(
       id,
       {
         ...enrichedDto,
@@ -254,16 +367,34 @@ export class ResumeService implements OnModuleInit {
         new: true,
       },
     );
+
+    this.logger.log(`用户 ${userId} 成功更新简历 ${id}`);
+    return updatedResume;
   }
 
+  /**
+   * 删除简历
+   * @param id 简历 ID
+   * @param userId 用户 ID，用于权限验证
+   * @returns 被删除的简历对象
+   * @throws BadRequestException 当简历不存在或无权访问时
+   */
   async remove(id: string, userId: string) {
+    this.logger.log(`用户 ${userId} 删除简历 ${id}`);
+
     const resume = await this.resumeModel.findOneAndDelete({
       _id: id,
       userId,
     });
+
     if (!resume) {
-      throw new Error('简历不存在');
+      this.logger.warn(
+        `用户 ${userId} 删除简历 ${id} 失败：简历不存在或无权访问`,
+      );
+      throw new BadRequestException('简历不存在');
     }
+
+    this.logger.log(`用户 ${userId} 成功删除简历 ${id}`);
     return resume;
   }
 
@@ -275,13 +406,25 @@ export class ResumeService implements OnModuleInit {
    * @param title 可选的新标题，未提供则使用“原标题 (副本)”
    */
   async copy(id: string, userId: string, title?: string) {
+    this.logger.log(`用户 ${userId} 尝试复制简历 ${id}`);
+
     // 校验目标简历是否存在且属于当前用户
     const doc = await this.resumeModel
       .findOne({ _id: id, userId })
       .select('-_id -createdAt -updatedAt -__v -user -userId -isTemplate')
       .exec();
+
     if (!doc) {
+      this.logger.warn(
+        `用户 ${userId} 复制简历 ${id} 失败：简历不存在或无权访问`,
+      );
       throw new BadRequestException('简历不存在');
+    }
+
+    // 检查是否为模板，不允许复制模板
+    if (doc.isTemplate) {
+      this.logger.warn(`用户 ${userId} 尝试复制模板简历 ${id}`);
+      throw new BadRequestException('不允许复制模板简历');
     }
 
     // 将文档转换为普通对象（已通过 select 排除不需要的字段）
@@ -289,12 +432,17 @@ export class ResumeService implements OnModuleInit {
 
     const newTitle = title || `${doc.title ?? '未命名简历'} (副本)`;
 
-    return await this.resumeModel.create({
+    const newResume = await this.resumeModel.create({
       ...(sourceObj as Record<string, unknown>),
       title: newTitle,
       isTemplate: false,
       userId,
       user: new Types.ObjectId(userId),
     });
+
+    this.logger.log(
+      `用户 ${userId} 成功复制简历 ${id}，新简历 ID: ${newResume._id.toString()}`,
+    );
+    return newResume;
   }
 }

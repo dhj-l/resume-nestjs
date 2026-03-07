@@ -1,338 +1,379 @@
 import {
   IsString,
-  IsNotEmpty,
   IsOptional,
   ValidateNested,
   IsArray,
   IsNumber,
+  MinLength,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
+/**
+ * 全局样式配置 DTO
+ */
 export class GlobalStyleDto {
-  @IsString()
+  @IsString({ message: '字体大小必须是字符串' })
   @IsOptional()
-  fontSize: string;
+  fontSize?: string;
 
-  @IsString()
+  @IsString({ message: '模块间距必须是字符串' })
   @IsOptional()
-  moduleMargin: string;
+  moduleMargin?: string;
 
-  @IsString()
+  @IsString({ message: '页面边距必须是字符串' })
   @IsOptional()
-  pageMargin: string;
+  pageMargin?: string;
 
-  @IsString()
+  @IsString({ message: '行高必须是字符串' })
   @IsOptional()
-  lineHeight: string;
+  lineHeight?: string;
 }
 
+/**
+ * 基础信息 DTO
+ */
 export class BasicInfoDto {
-  @IsString()
-  @IsNotEmpty()
-  name: string;
-
-  @IsString()
+  @IsString({ message: '姓名必须是字符串' })
   @IsOptional()
-  gender: string;
+  name?: string;
 
-  @IsString()
+  @IsString({ message: '性别必须是字符串' })
   @IsOptional()
-  phone: string;
+  gender?: string;
 
-  @IsString()
+  @IsString({ message: '手机号必须是字符串' })
   @IsOptional()
-  age: string;
+  phone?: string;
 
-  @IsString()
+  @IsString({ message: '年龄必须是字符串' })
   @IsOptional()
-  email: string;
+  age?: string;
 
-  @IsString()
+  @IsString({ message: '邮箱必须是字符串' })
   @IsOptional()
-  avatar: string;
+  email?: string;
 
-  @IsString()
+  @IsString({ message: '头像必须是字符串' })
   @IsOptional()
-  politicalStatus: string;
+  avatar?: string;
 
-  @IsString()
+  @IsString({ message: '政治面貌必须是字符串' })
   @IsOptional()
-  workYear: string;
+  politicalStatus?: string;
+
+  @IsString({ message: '工作年限必须是字符串' })
+  @IsOptional()
+  workYear?: string;
 }
 
+/**
+ * 求职意向 DTO
+ */
 export class JobIntentionDto {
-  @IsString()
+  @IsString({ message: '求职意向必须是字符串' })
   @IsOptional()
-  jobIntention: string;
+  jobIntention?: string;
 
-  @IsString()
+  @IsString({ message: '意向城市必须是字符串' })
   @IsOptional()
-  intentionCity: string;
+  intentionCity?: string;
 
-  @IsString()
+  @IsString({ message: '期望薪资必须是字符串' })
   @IsOptional()
-  expectationSalary: string;
+  expectationSalary?: string;
 
-  @IsString()
+  @IsString({ message: '入职时间必须是字符串' })
   @IsOptional()
-  entryTime: string;
+  entryTime?: string;
 }
 
+/**
+ * 教育背景 DTO
+ */
 export class EducationBackgroundDto {
-  @IsString()
+  @IsString({ message: '学校名称必须是字符串' })
   @IsOptional()
-  schoolName: string;
+  schoolName?: string;
 
-  @IsString()
+  @IsString({ message: '学历必须是字符串' })
   @IsOptional()
-  degree: string;
+  degree?: string;
 
-  @IsString()
+  @IsString({ message: '专业必须是字符串' })
   @IsOptional()
-  major: string;
+  major?: string;
 
-  @IsString()
+  @IsString({ message: '入学时间必须是字符串' })
   @IsOptional()
-  enrollmentTime: string;
+  enrollmentTime?: string;
 
-  @IsString()
+  @IsString({ message: '毕业时间必须是字符串' })
   @IsOptional()
-  graduationTime: string;
+  graduationTime?: string;
 
-  @IsString()
+  @IsString({ message: '详细内容必须是字符串' })
   @IsOptional()
-  content: string;
+  content?: string;
 
-  @IsNumber()
+  @IsNumber({}, { message: '全局排序必须是数字' })
   @IsOptional()
-  globalSort: number;
+  globalSort?: number;
 
-  @IsNumber()
+  @IsNumber({}, { message: '局部排序必须是数字' })
   @IsOptional()
-  localSort: number;
+  localSort?: number;
 }
 
+/**
+ * 工作经验 DTO
+ */
 export class WorkExperienceDto {
-  @IsString()
+  @IsString({ message: '公司名称必须是字符串' })
   @IsOptional()
-  companyName: string;
+  companyName?: string;
 
-  @IsString()
+  @IsString({ message: '职位必须是字符串' })
   @IsOptional()
-  position: string;
+  position?: string;
 
-  @IsString()
+  @IsString({ message: '入职时间必须是字符串' })
   @IsOptional()
-  workTime: string;
+  workTime?: string;
 
-  @IsString()
+  @IsString({ message: '离职时间必须是字符串' })
   @IsOptional()
-  dismissalTime: string;
+  dismissalTime?: string;
 
-  @IsString()
+  @IsString({ message: '工作描述必须是字符串' })
   @IsOptional()
-  workDescription: string;
+  workDescription?: string;
 
-  @IsNumber()
+  @IsNumber({}, { message: '全局排序必须是数字' })
   @IsOptional()
-  globalSort: number;
+  globalSort?: number;
 
-  @IsNumber()
+  @IsNumber({}, { message: '局部排序必须是数字' })
   @IsOptional()
-  localSort: number;
+  localSort?: number;
 }
 
+/**
+ * 校园经历 DTO
+ */
 export class CampusExperienceDto {
-  @IsString()
+  @IsString({ message: '开始时间必须是字符串' })
   @IsOptional()
-  startTime: string;
+  startTime?: string;
 
-  @IsString()
+  @IsString({ message: '结束时间必须是字符串' })
   @IsOptional()
-  endTime: string;
+  endTime?: string;
 
-  @IsString()
-  @IsOptional()
-  title: string;
-
-  @IsString()
-  @IsOptional()
-  description: string;
-
-  @IsString()
-  @IsOptional()
-  content: string;
-
-  @IsNumber()
-  @IsOptional()
-  globalSort: number;
-
-  @IsNumber()
-  @IsOptional()
-  localSort: number;
-}
-
-export class ProjectExperienceDto {
-  @IsString()
-  @IsOptional()
-  startTime: string;
-
-  @IsString()
-  @IsOptional()
-  endTime: string;
-
-  @IsString()
-  @IsOptional()
-  title: string;
-
-  @IsString()
-  @IsOptional()
-  description: string;
-
-  @IsString()
-  @IsOptional()
-  content: string;
-
-  @IsNumber()
-  @IsOptional()
-  globalSort: number;
-
-  @IsNumber()
-  @IsOptional()
-  localSort: number;
-}
-
-export class InternshipExperienceDto {
-  @IsString()
-  @IsOptional()
-  startTime: string;
-
-  @IsString()
-  @IsOptional()
-  endTime: string;
-
-  @IsString()
-  @IsOptional()
-  companyName: string;
-
-  @IsString()
-  @IsOptional()
-  position: string;
-
-  @IsString()
-  @IsOptional()
-  description: string;
-
-  @IsNumber()
-  @IsOptional()
-  globalSort: number;
-
-  @IsNumber()
-  @IsOptional()
-  localSort: number;
-}
-
-export class SkillsDto {
-  @IsString()
-  @IsOptional()
-  content: string;
-
-  @IsNumber()
-  @IsOptional()
-  globalSort: number;
-}
-
-export class CertificatesDto {
-  @IsString()
-  @IsOptional()
-  content: string;
-
-  @IsNumber()
-  @IsOptional()
-  globalSort: number;
-}
-
-export class SelfEvaluationDto {
-  @IsString()
-  @IsOptional()
-  content: string;
-
-  @IsNumber()
-  @IsOptional()
-  globalSort: number;
-}
-
-export class CreateResumeDto {
-  @IsString()
-  @IsOptional()
-  templateId?: string;
-
-  @IsString()
+  @IsString({ message: '经历名称必须是字符串' })
   @IsOptional()
   title?: string;
 
-  @ValidateNested()
+  @IsString({ message: '经历描述必须是字符串' })
+  @IsOptional()
+  description?: string;
+
+  @IsString({ message: '经历内容必须是字符串' })
+  @IsOptional()
+  content?: string;
+
+  @IsNumber({}, { message: '全局排序必须是数字' })
+  @IsOptional()
+  globalSort?: number;
+
+  @IsNumber({}, { message: '局部排序必须是数字' })
+  @IsOptional()
+  localSort?: number;
+}
+
+/**
+ * 项目经历 DTO
+ */
+export class ProjectExperienceDto {
+  @IsString({ message: '项目开始时间必须是字符串' })
+  @IsOptional()
+  startTime?: string;
+
+  @IsString({ message: '项目结束时间必须是字符串' })
+  @IsOptional()
+  endTime?: string;
+
+  @IsString({ message: '项目名称必须是字符串' })
+  @IsOptional()
+  title?: string;
+
+  @IsString({ message: '项目描述必须是字符串' })
+  @IsOptional()
+  description?: string;
+
+  @IsString({ message: '项目内容必须是字符串' })
+  @IsOptional()
+  content?: string;
+
+  @IsNumber({}, { message: '全局排序必须是数字' })
+  @IsOptional()
+  globalSort?: number;
+
+  @IsNumber({}, { message: '局部排序必须是数字' })
+  @IsOptional()
+  localSort?: number;
+}
+
+/**
+ * 实习经历 DTO
+ */
+export class InternshipExperienceDto {
+  @IsString({ message: '实习开始时间必须是字符串' })
+  @IsOptional()
+  startTime?: string;
+
+  @IsString({ message: '实习结束时间必须是字符串' })
+  @IsOptional()
+  endTime?: string;
+
+  @IsString({ message: '公司名称必须是字符串' })
+  @IsOptional()
+  companyName?: string;
+
+  @IsString({ message: '职位必须是字符串' })
+  @IsOptional()
+  position?: string;
+
+  @IsString({ message: '实习描述必须是字符串' })
+  @IsOptional()
+  description?: string;
+
+  @IsNumber({}, { message: '全局排序必须是数字' })
+  @IsOptional()
+  globalSort?: number;
+
+  @IsNumber({}, { message: '局部排序必须是数字' })
+  @IsOptional()
+  localSort?: number;
+}
+
+/**
+ * 技能特长 DTO
+ */
+export class SkillsDto {
+  @IsString({ message: '技能内容必须是字符串' })
+  @IsOptional()
+  content?: string;
+
+  @IsNumber({}, { message: '全局排序必须是数字' })
+  @IsOptional()
+  globalSort?: number;
+}
+
+/**
+ * 荣誉证书 DTO
+ */
+export class CertificatesDto {
+  @IsString({ message: '证书内容必须是字符串' })
+  @IsOptional()
+  content?: string;
+
+  @IsNumber({}, { message: '全局排序必须是数字' })
+  @IsOptional()
+  globalSort?: number;
+}
+
+/**
+ * 自我评价 DTO
+ */
+export class SelfEvaluationDto {
+  @IsString({ message: '评价内容必须是字符串' })
+  @IsOptional()
+  content?: string;
+
+  @IsNumber({}, { message: '全局排序必须是数字' })
+  @IsOptional()
+  globalSort?: number;
+}
+
+/**
+ * 创建简历 DTO
+ */
+export class CreateResumeDto {
+  @IsString({ message: '模板 ID 必须是字符串' })
+  @IsOptional()
+  templateId?: string;
+
+  @IsString({ message: '简历标题必须是字符串' })
+  @IsOptional()
+  @MinLength(1, { message: '简历标题长度至少为1位' })
+  @MaxLength(100, { message: '简历标题长度不能超过100位' })
+  title?: string;
+
+  @ValidateNested({ message: '全局样式配置格式不正确' })
   @Type(() => GlobalStyleDto)
   @IsOptional()
-  globalStyle: GlobalStyleDto;
+  globalStyle?: GlobalStyleDto;
 
-  @ValidateNested()
+  @ValidateNested({ message: '基础信息格式不正确' })
   @Type(() => BasicInfoDto)
   @IsOptional()
-  basicInfo: BasicInfoDto;
+  basicInfo?: BasicInfoDto;
 
-  @ValidateNested()
+  @ValidateNested({ message: '求职意向格式不正确' })
   @Type(() => JobIntentionDto)
   @IsOptional()
-  jobIntention: JobIntentionDto;
+  jobIntention?: JobIntentionDto;
 
-  @IsArray()
-  @ValidateNested({ each: true })
+  @IsArray({ message: '教育背景必须是数组' })
+  @ValidateNested({ each: true, message: '教育背景项格式不正确' })
   @Type(() => EducationBackgroundDto)
   @IsOptional()
-  educationBackground: EducationBackgroundDto[];
+  educationBackground?: EducationBackgroundDto[];
 
-  @IsArray()
-  @ValidateNested({ each: true })
+  @IsArray({ message: '工作经验必须是数组' })
+  @ValidateNested({ each: true, message: '工作经验项格式不正确' })
   @Type(() => WorkExperienceDto)
   @IsOptional()
-  workExperience: WorkExperienceDto[];
+  workExperience?: WorkExperienceDto[];
 
-  @IsArray()
-  @ValidateNested({ each: true })
+  @IsArray({ message: '校园经历必须是数组' })
+  @ValidateNested({ each: true, message: '校园经历项格式不正确' })
   @Type(() => CampusExperienceDto)
   @IsOptional()
-  campusExperience: CampusExperienceDto[];
+  campusExperience?: CampusExperienceDto[];
 
-  @ValidateNested()
+  @ValidateNested({ message: '技能特长格式不正确' })
   @Type(() => SkillsDto)
   @IsOptional()
-  skills: SkillsDto;
+  skills?: SkillsDto;
 
-  @ValidateNested()
+  @ValidateNested({ message: '荣誉证书格式不正确' })
   @Type(() => CertificatesDto)
   @IsOptional()
-  certificates: CertificatesDto;
+  certificates?: CertificatesDto;
 
-  @IsArray()
-  @ValidateNested({ each: true })
+  @IsArray({ message: '项目经历必须是数组' })
+  @ValidateNested({ each: true, message: '项目经历项格式不正确' })
   @Type(() => ProjectExperienceDto)
   @IsOptional()
-  projectExperience: ProjectExperienceDto[];
+  projectExperience?: ProjectExperienceDto[];
 
-  @IsArray()
-  @ValidateNested({ each: true })
+  @IsArray({ message: '实习经历必须是数组' })
+  @ValidateNested({ each: true, message: '实习经历项格式不正确' })
   @Type(() => InternshipExperienceDto)
   @IsOptional()
-  internshipExperience: InternshipExperienceDto[];
+  internshipExperience?: InternshipExperienceDto[];
 
-  @ValidateNested()
+  @ValidateNested({ message: '自我评价格式不正确' })
   @Type(() => SelfEvaluationDto)
   @IsOptional()
-  selfEvaluation: SelfEvaluationDto;
+  selfEvaluation?: SelfEvaluationDto;
+
   /**
    * 简历模板类型
    */
-  @IsString()
-  type: string;
+  @IsString({ message: '简历类型必须是字符串' })
+  @IsOptional()
+  type?: string;
 }
