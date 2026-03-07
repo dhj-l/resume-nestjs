@@ -17,6 +17,12 @@ import { Model, Types } from 'mongoose';
 import puppeteer from 'puppeteer';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { GetResumeDto } from './dto/get-resume.dto';
+
+type SortableItem = {
+  globalSort?: number;
+  localSort?: number;
+};
 
 @Injectable()
 export class ResumeService implements OnModuleInit {
@@ -30,6 +36,44 @@ export class ResumeService implements OnModuleInit {
   onModuleInit() {
     const tailwindPath = join(__dirname, '..', 'assets', 'tailwind.browser.js');
     this.tailwindScript = readFileSync(tailwindPath, 'utf-8');
+  }
+
+  private processSortFields<T extends SortableItem>(items: T[]): T[] {
+    if (!items || !Array.isArray(items)) return items;
+
+    return items.map((item, index) => ({
+      ...item,
+      globalSort: item.globalSort ?? 0,
+      localSort: item.localSort ?? index,
+    }));
+  }
+
+  private enrichWithSortFields(dto: UpdateResumeDto | CreateResumeDto) {
+    const result = { ...dto };
+
+    if (result.educationBackground) {
+      result.educationBackground = this.processSortFields(
+        result.educationBackground,
+      );
+    }
+    if (result.workExperience) {
+      result.workExperience = this.processSortFields(result.workExperience);
+    }
+    if (result.campusExperience) {
+      result.campusExperience = this.processSortFields(result.campusExperience);
+    }
+    if (result.projectExperience) {
+      result.projectExperience = this.processSortFields(
+        result.projectExperience,
+      );
+    }
+    if (result.internshipExperience) {
+      result.internshipExperience = this.processSortFields(
+        result.internshipExperience,
+      );
+    }
+
+    return result;
   }
 
   private getContent(html: string, css: string) {
@@ -106,15 +150,12 @@ export class ResumeService implements OnModuleInit {
   async create(userId: string, createResumeDto: CreateResumeDto) {
     const { templateId, title } = createResumeDto;
 
-    // 如果传入了模板 ID，则进入模板创建逻辑
     if (templateId) {
-      // 1. 查询模板信息
       const template = await this.templateModel.findById(templateId).exec();
       if (!template) {
         throw new NotFoundException('指定的模板不存在');
       }
 
-      // 2. 获取该模板关联的简历原始数据，并排除不需要的字段
       const resumeData = await this.resumeModel
         .findById(template.resumeId)
         .select('-_id -createdAt -updatedAt -__v')
@@ -125,26 +166,24 @@ export class ResumeService implements OnModuleInit {
         throw new NotFoundException('模板关联的简历原始数据已丢失');
       }
 
-      // 3. 创建新简历，并将所有权归属于当前用户，同时标记为非模板
       return await this.resumeModel.create({
         ...resumeData,
-        /**
-         * 简历类型
-         */
         type: resumeData.type || 'default',
         title: title || `${resumeData.title} (副本)`,
         userId,
         user: new Types.ObjectId(userId),
-        isTemplate: false, // 新生成的简历不应被标记为模板
+        isTemplate: false,
       });
     }
 
-    // 如果没有传入模板 ID，则创建一个默认的空白简历
+    const enrichedDto = this.enrichWithSortFields(createResumeDto);
+
     return await this.resumeModel.create({
       title: title || '未命名简历',
       userId,
       user: new Types.ObjectId(userId),
       isTemplate: false,
+      ...enrichedDto,
     });
   }
   // 查找所有模板
@@ -154,8 +193,9 @@ export class ResumeService implements OnModuleInit {
   /**
    * 查找用户所有非模板简历
    */
-  async findAll(userId: string) {
-    return await this.resumeModel
+  async findAll(userId: string, query: GetResumeDto) {
+    const { page = 1, pageSize = 6 } = query;
+    const res = await this.resumeModel
       .find({ userId, isTemplate: false })
       .select([
         '_id',
@@ -166,7 +206,20 @@ export class ResumeService implements OnModuleInit {
         'createdAt',
         'updatedAt',
       ])
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
+      .sort({ createdAt: -1 })
       .exec();
+    const total = await this.resumeModel.countDocuments({
+      userId,
+      isTemplate: false,
+    });
+    return {
+      list: res,
+      total,
+      page,
+      pageSize,
+    };
   }
 
   async findOne(id: string, userId: string) {
@@ -189,10 +242,12 @@ export class ResumeService implements OnModuleInit {
       throw new BadRequestException('简历不存在');
     }
 
+    const enrichedDto = this.enrichWithSortFields(updateResumeDto);
+
     return await this.resumeModel.findByIdAndUpdate(
       id,
       {
-        ...updateResumeDto,
+        ...enrichedDto,
         updatedAt: new Date(),
       },
       {

@@ -157,6 +157,17 @@ export class EducationBackground {
    */
   @Prop()
   content: string;
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
+
+  /**
+   * 局部排序字段
+   */
+  @Prop({ default: 0 })
+  localSort: number;
 }
 
 /**
@@ -193,6 +204,18 @@ export class WorkExperience {
    */
   @Prop()
   workDescription: string;
+
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
+
+  /**
+   * 局部排序字段
+   */
+  @Prop({ default: 0 })
+  localSort: number;
 }
 
 /**
@@ -229,6 +252,18 @@ export class CampusExperience {
    */
   @Prop()
   content: string;
+
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
+
+  /**
+   * 局部排序字段
+   */
+  @Prop({ default: 0 })
+  localSort: number;
 }
 
 /**
@@ -265,6 +300,18 @@ export class ProjectExperience {
    */
   @Prop()
   content: string;
+
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
+
+  /**
+   * 局部排序字段
+   */
+  @Prop({ default: 0 })
+  localSort: number;
 }
 
 /**
@@ -301,6 +348,72 @@ export class InternshipExperience {
    */
   @Prop()
   description: string;
+
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
+
+  /**
+   * 局部排序字段
+   */
+  @Prop({ default: 0 })
+  localSort: number;
+}
+
+/**
+ * 技能特长
+ */
+@Schema({ _id: false })
+export class Skills {
+  /**
+   * 技能内容
+   */
+  @Prop({ default: '' })
+  content: string;
+
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
+}
+
+/**
+ * 荣誉证书
+ */
+@Schema({ _id: false })
+export class Certificates {
+  /**
+   * 证书内容
+   */
+  @Prop({ default: '' })
+  content: string;
+
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
+}
+
+/**
+ * 自我评价
+ */
+@Schema({ _id: false })
+export class SelfEvaluation {
+  /**
+   * 评价内容
+   */
+  @Prop({ default: '' })
+  content: string;
+
+  /**
+   * 全局排序字段
+   */
+  @Prop({ default: 0 })
+  globalSort: number;
 }
 
 /**
@@ -365,14 +478,14 @@ export class Resume {
   /**
    * 技能特长
    */
-  @Prop({ default: '' })
-  skills: string;
+  @Prop({ type: Skills, default: {} })
+  skills: Skills;
 
   /**
    * 荣誉证书
    */
-  @Prop({ default: '' })
-  certificates: string;
+  @Prop({ type: Certificates, default: {} })
+  certificates: Certificates;
 
   /**
    * 项目经历
@@ -389,8 +502,8 @@ export class Resume {
   /**
    * 自我评价
    */
-  @Prop({ default: '' })
-  selfEvaluation: string;
+  @Prop({ type: SelfEvaluation, default: {} })
+  selfEvaluation: SelfEvaluation;
 
   /**
    * 是否为模板

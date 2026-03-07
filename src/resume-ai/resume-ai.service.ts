@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { CreateAiResuemDto } from './dto/createAiResuem.dto';
+import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 import {
   ResumeAi,
   ResumeAiStatusEnum,
@@ -8,7 +8,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { PromptTemplate } from '@langchain/core/prompts';
-import { resumeAiPrompt } from './prompt/resume_ai';
+import { ContentPromt, resumeAiPrompt } from './prompt/resume_ai';
 import { AiService } from 'src/ai/ai.service';
 import { JsonOutputParser } from '@langchain/core/output_parsers';
 import { Resume } from 'src/resume/entities/resume.entity';
@@ -27,6 +27,24 @@ import {
   VALIDATION_MESSAGES,
   matchKeywordGroup,
 } from './constants/job-validation.constants';
+import {
+  RESUME_MIN_LENGTH,
+  RESUME_MAX_LENGTH,
+  RESUME_MIN_PARAGRAPHS,
+  RESUME_MIN_LINE_BREAKS,
+  RESUME_MIN_DATE_COUNT,
+  RESUME_PASSING_SCORE,
+  RESUME_KEYWORD_GROUPS,
+  RESUME_REQUIRED_KEYWORD_GROUPS,
+  RESUME_VALIDATION_MESSAGES,
+  REQUIRED_KEYWORD_GROUPS,
+  ValidationDetails,
+  ValidationResult,
+  matchResumeKeywordGroup,
+  countDatePatterns,
+  hasContactInfo,
+  hasNonResumeContent,
+} from './constants/resume-validation.constants';
 
 @Injectable()
 export class ResumeAiService {
@@ -41,9 +59,7 @@ export class ResumeAiService {
    */
   async generateResume(createAiResuemDto: CreateAiResuemDto, userId: string) {
     const { parseType, jobDescription } = createAiResuemDto;
-    const { isValid, reason, score } =
-      this.validateJobDescription(jobDescription);
-    console.log(score);
+    const { isValid, reason } = this.validateJobDescription(jobDescription);
 
     if (!isValid) {
       throw new BadRequestException(reason);
@@ -70,6 +86,10 @@ export class ResumeAiService {
     //检查当前用户是否存在正在创建的简历
     await this.checkExistResume(userId);
     const { resumeContent, jobDescription } = createAiResuemDto;
+    const { isValid, reason } = this.validateResumeContent(resumeContent!);
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
     //创建记录
     const record = await this.createRecord(userId, {
       ...createAiResuemDto,
@@ -125,7 +145,10 @@ export class ResumeAiService {
       throw new BadRequestException('不存在该简历');
     }
     const content = this.parseSupplementary(resume.toObject());
-
+    const { isValid, reason } = this.validateResumeContent(content);
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
     //创建记录
     const record = await this.createRecord(userId, {
       ...createAiResuemDto,
@@ -172,6 +195,7 @@ export class ResumeAiService {
     await this.checkExistResume(userId);
     //解析传入的详细信息
     const content = this.parseSupplementary(detailInfo!);
+
     //创建记录
     const record = await this.createRecord(userId, {
       ...createAiResuemDto,
@@ -312,6 +336,40 @@ export class ResumeAiService {
   }
 
   /**
+   * 解析简历
+   */
+  async parseResume(parserResumeDto: ParserResumeDto, userId: string) {
+    try {
+      const { resumeContent, templateType, templateId } = parserResumeDto;
+      //检查当前用户是否存在正在创建的简历
+      await this.checkExistResume(userId);
+      //校验简历内容是否合格
+      const { isValid, reason } = this.validateResumeContent(resumeContent);
+      if (!isValid) {
+        throw new BadRequestException(reason);
+      }
+      const prompt = PromptTemplate.fromTemplate(ContentPromt);
+      const model = this.aiService.generateResume();
+      const parser = new JsonOutputParser();
+      const chain = prompt.pipe(model).pipe(parser);
+      const date = new Date();
+      const current = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+      const res = await chain.invoke({
+        resume_text: resumeContent,
+        current_date: current,
+      });
+      const result = await this.createResume(
+        { ...res, templateId } as CreateResumeDto,
+        templateType,
+        userId,
+      );
+      return result;
+    } catch (error) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
    * 校验 JD - 通用版本，支持中英文混合、全岗位类型
    * @param jobDescription 岗位描述
    * @param language 返回消息的语言 ('CN' | 'EN')，默认 'CN'
@@ -408,6 +466,171 @@ export class ResumeAiService {
       reason,
       errors,
       score,
+    };
+  }
+
+  /**
+   * 校验简历内容 - 判断是否为有效的简历文档
+   * @param resumeContent 简历内容
+   * @param language 返回消息的语言 ('CN' | 'EN')，默认 'CN'
+   */
+  validateResumeContent(
+    resumeContent: string,
+    language: 'CN' | 'EN' = 'CN',
+  ): ValidationResult {
+    const errors: string[] = [];
+    const messages = RESUME_VALIDATION_MESSAGES[language];
+    let score = 0;
+
+    const details: ValidationDetails = {
+      hasPersonalInfo: false,
+      hasEducation: false,
+      hasWorkExperience: false,
+      hasSkills: false,
+      hasProject: false,
+      hasSelfEvaluation: false,
+      hasTimeFormat: false,
+      hasContactInfo: false,
+      matchedKeywordGroups: [],
+      contentLength: resumeContent.length,
+      paragraphCount: 0,
+      lineBreakCount: 0,
+      dateCount: 0,
+    };
+
+    const length = resumeContent.length;
+
+    if (length > RESUME_MAX_LENGTH) {
+      errors.push(messages.tooLong);
+      return {
+        isValid: false,
+        reason: messages.tooLong,
+        errors,
+        score: 0,
+        details,
+      };
+    }
+
+    if (length < RESUME_MIN_LENGTH) {
+      errors.push(messages.tooShort);
+    } else {
+      score += 15;
+    }
+
+    const paragraphs = resumeContent
+      .split(/\n\s*\n/)
+      .filter((p) => p.trim().length > 0);
+    const lineBreaks = (resumeContent.match(/\n/g) || []).length;
+
+    details.paragraphCount = paragraphs.length;
+    details.lineBreakCount = lineBreaks;
+
+    if (
+      paragraphs.length < RESUME_MIN_PARAGRAPHS &&
+      lineBreaks < RESUME_MIN_LINE_BREAKS
+    ) {
+      errors.push(messages.insufficientStructure);
+    } else {
+      score += 15;
+    }
+
+    const dateCount = countDatePatterns(resumeContent);
+    details.dateCount = dateCount;
+
+    if (dateCount >= RESUME_MIN_DATE_COUNT) {
+      details.hasTimeFormat = true;
+      score += 10;
+    } else {
+      errors.push(messages.missingTimeFormat);
+    }
+
+    details.hasContactInfo = hasContactInfo(resumeContent);
+
+    let matchedGroups = 0;
+
+    for (const group of RESUME_KEYWORD_GROUPS) {
+      if (matchResumeKeywordGroup(resumeContent, group)) {
+        matchedGroups++;
+        details.matchedKeywordGroups.push(group.name);
+
+        switch (group.name) {
+          case 'personalInfo':
+            details.hasPersonalInfo = true;
+            if (details.hasContactInfo) {
+              score += 20;
+            } else {
+              score += 10;
+            }
+            break;
+          case 'education':
+            details.hasEducation = true;
+            score += 15;
+            break;
+          case 'workExperience':
+            details.hasWorkExperience = true;
+            score += 15;
+            break;
+          case 'skills':
+            details.hasSkills = true;
+            score += 10;
+            break;
+          case 'project':
+            details.hasProject = true;
+            score += 5;
+            break;
+          case 'selfEvaluation':
+            details.hasSelfEvaluation = true;
+            score += 5;
+            break;
+        }
+      }
+    }
+
+    if (matchedGroups < RESUME_REQUIRED_KEYWORD_GROUPS) {
+      if (!details.hasPersonalInfo) {
+        errors.push(messages.missingPersonalInfo);
+      }
+      if (!details.hasEducation) {
+        errors.push(messages.missingEducation);
+      }
+      if (!details.hasWorkExperience) {
+        errors.push(messages.missingWorkExperience);
+      }
+      if (!details.hasSkills) {
+        errors.push(messages.missingSkills);
+      }
+    }
+
+    if (hasNonResumeContent(resumeContent)) {
+      errors.push(messages.nonResumeContent);
+      score = Math.max(0, score - 30);
+    }
+
+    const hasAllRequiredFields = REQUIRED_KEYWORD_GROUPS.every(
+      (requiredGroup) => details.matchedKeywordGroups.includes(requiredGroup),
+    );
+
+    if (!hasAllRequiredFields) {
+      errors.push(messages.missingRequiredFields);
+    }
+
+    const isValid =
+      score >= RESUME_PASSING_SCORE &&
+      !hasNonResumeContent(resumeContent) &&
+      hasAllRequiredFields;
+
+    const reason = isValid
+      ? language === 'CN'
+        ? '简历内容校验通过'
+        : 'Resume content validation passed'
+      : errors[0] || messages.invalidContent;
+
+    return {
+      isValid,
+      reason,
+      errors,
+      score,
+      details,
     };
   }
 }

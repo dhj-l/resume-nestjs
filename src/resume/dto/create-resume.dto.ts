@@ -4,6 +4,7 @@ import {
   IsOptional,
   ValidateNested,
   IsArray,
+  IsNumber,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -101,6 +102,14 @@ export class EducationBackgroundDto {
   @IsString()
   @IsOptional()
   content: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
+
+  @IsNumber()
+  @IsOptional()
+  localSort: number;
 }
 
 export class WorkExperienceDto {
@@ -123,6 +132,14 @@ export class WorkExperienceDto {
   @IsString()
   @IsOptional()
   workDescription: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
+
+  @IsNumber()
+  @IsOptional()
+  localSort: number;
 }
 
 export class CampusExperienceDto {
@@ -145,6 +162,14 @@ export class CampusExperienceDto {
   @IsString()
   @IsOptional()
   content: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
+
+  @IsNumber()
+  @IsOptional()
+  localSort: number;
 }
 
 export class ProjectExperienceDto {
@@ -167,6 +192,14 @@ export class ProjectExperienceDto {
   @IsString()
   @IsOptional()
   content: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
+
+  @IsNumber()
+  @IsOptional()
+  localSort: number;
 }
 
 export class InternshipExperienceDto {
@@ -189,6 +222,44 @@ export class InternshipExperienceDto {
   @IsString()
   @IsOptional()
   description: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
+
+  @IsNumber()
+  @IsOptional()
+  localSort: number;
+}
+
+export class SkillsDto {
+  @IsString()
+  @IsOptional()
+  content: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
+}
+
+export class CertificatesDto {
+  @IsString()
+  @IsOptional()
+  content: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
+}
+
+export class SelfEvaluationDto {
+  @IsString()
+  @IsOptional()
+  content: string;
+
+  @IsNumber()
+  @IsOptional()
+  globalSort: number;
 }
 
 export class CreateResumeDto {
@@ -233,13 +304,15 @@ export class CreateResumeDto {
   @IsOptional()
   campusExperience: CampusExperienceDto[];
 
-  @IsString()
+  @ValidateNested()
+  @Type(() => SkillsDto)
   @IsOptional()
-  skills: string;
+  skills: SkillsDto;
 
-  @IsString()
+  @ValidateNested()
+  @Type(() => CertificatesDto)
   @IsOptional()
-  certificates: string;
+  certificates: CertificatesDto;
 
   @IsArray()
   @ValidateNested({ each: true })
@@ -253,9 +326,10 @@ export class CreateResumeDto {
   @IsOptional()
   internshipExperience: InternshipExperienceDto[];
 
-  @IsString()
+  @ValidateNested()
+  @Type(() => SelfEvaluationDto)
   @IsOptional()
-  selfEvaluation: string;
+  selfEvaluation: SelfEvaluationDto;
   /**
    * 简历模板类型
    */

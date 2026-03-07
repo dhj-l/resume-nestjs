@@ -51,3 +51,24 @@ export class CreateAiResuemDto {
   @IsNotEmpty()
   resumeId?: string;
 }
+
+export class ParserResumeDto {
+  /**
+   * 模板类型
+   */
+  @IsString()
+  @IsNotEmpty()
+  templateType: string;
+  /**
+   * 模板id
+   */
+  @IsString()
+  @IsNotEmpty()
+  templateId: string;
+  /**
+   * 简历内容
+   */
+  @IsString()
+  @IsNotEmpty()
+  resumeContent: string;
+}

@@ -8,7 +8,7 @@ export interface UserProfile {
  * @returns 生成简历描述的 prompt 文本
  */
 export function generateResumeDescription(profile: UserProfile): string {
-  return `6. 生成描述（generatedResumeDescription）
+  return ` 生成描述（generatedResumeDescription）
 该字段必须包含一份详细的简历评估与优化建议报告，使用 Markdown 格式（注意在 JSON 字符串中需正确转义换行符 \\n）。报告内容必须严格包含以下 8 个维度，并确保每一条建议都基于候选人真实履历与目标 JD 逐条对标：
 
 1. 匹配度总评

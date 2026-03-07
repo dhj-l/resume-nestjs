@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
-import { CreateAiResuemDto } from './dto/createAiResuem.dto';
+import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -23,6 +23,18 @@ export class ResumeAiController {
     try {
       const { userId } = req.user;
       return this.resumeAiService.generateResume(createAiResuemDto, userId);
+    } catch (error) {
+      throw new BadRequestException(error.message);
+    }
+  }
+  /**
+   * 解析简历
+   */
+  @Post('parse')
+  async parseResume(@Body() parserResumeDto: ParserResumeDto, @Req() req) {
+    try {
+      const { userId } = req.user;
+      return this.resumeAiService.parseResume(parserResumeDto, userId);
     } catch (error) {
       throw new BadRequestException(error.message);
     }

@@ -9,6 +9,7 @@ import {
   Req,
   Res,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ResumeService } from './resume.service';
@@ -17,6 +18,7 @@ import { UpdateResumeDto } from './dto/update-resume.dto';
 import { DownloadResumeDto } from './dto/download-resume.dto';
 import { CopyResumeDto } from './dto/copy-resume.dto';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { GetResumeDto } from './dto/get-resume.dto';
 
 @Controller('resume')
 @UseGuards(JwtAuthGuard)
@@ -57,9 +59,9 @@ export class ResumeController {
   }
 
   @Get()
-  findAll(@Req() req) {
+  findAll(@Req() req, @Query() query: GetResumeDto) {
     const { userId } = req.user;
-    return this.resumeService.findAll(userId);
+    return this.resumeService.findAll(userId, query);
   }
 
   @Get(':id')
