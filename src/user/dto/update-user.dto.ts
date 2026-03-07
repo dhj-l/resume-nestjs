@@ -1,4 +1,10 @@
-import { IsOptional, IsString, MinLength, MaxLength, IsEmail } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  MinLength,
+  MaxLength,
+  IsEmail,
+} from 'class-validator';
 
 /**
  * 更新用户 DTO
