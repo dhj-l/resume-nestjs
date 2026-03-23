@@ -13,7 +13,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/api/index.js"
+      "dest": "/dist/main.js"
     }
   ],
   "env": {

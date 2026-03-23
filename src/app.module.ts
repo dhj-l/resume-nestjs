@@ -16,12 +16,12 @@ import { ResumeAiModule } from './resume-ai/resume-ai.module';
 
 @Module({
   imports: [
-    MongooseModule.forRoot(process.env.MONGODB_URI),
+    MongooseModule.forRoot('mongodb://localhost:27017/ai-resume'),
     UserModule,
     ResumeModule,
     AuthModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET,
+      secret: 'secretKey',
       signOptions: { expiresIn: '2d' },
       global: true,
     }),
