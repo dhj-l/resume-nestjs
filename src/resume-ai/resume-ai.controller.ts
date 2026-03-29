@@ -4,7 +4,6 @@ import {
   Controller,
   Post,
   Req,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ResumeAiService } from './resume-ai.service';

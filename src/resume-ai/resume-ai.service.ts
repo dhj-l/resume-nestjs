@@ -349,7 +349,7 @@ export class ResumeAiService {
         throw new BadRequestException(reason);
       }
       const prompt = PromptTemplate.fromTemplate(ContentPromt);
-      const model = this.aiService.generateResume();
+      const model = this.aiService.generateImportResume();
       const parser = new JsonOutputParser();
       const chain = prompt.pipe(model).pipe(parser);
       const date = new Date();

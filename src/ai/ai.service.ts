@@ -8,7 +8,7 @@ export class AiService {
       model = 'deepseek-chat',
       apiKey,
       maxTokens = 4000,
-      temperature = 0.7,
+      temperature = 0.5,
     } = props;
     const chat = new ChatDeepSeek({
       model,
@@ -25,6 +25,17 @@ export class AiService {
     const chat = this.createDefaultDeepSeek({
       // TODO：先写死，后续从配置文件读取
       apiKey: 'sk-78a213f613004e8c98f6d6b2ad50ae75',
+    });
+    return chat;
+  }
+  /**
+   * 解析简历AI模型
+   */
+  generateImportResume() {
+    const chat = this.createDefaultDeepSeek({
+      // TODO：先写死，后续从配置文件读取
+      apiKey: 'sk-78a213f613004e8c98f6d6b2ad50ae75',
+      temperature: 0.1,
     });
     return chat;
   }
