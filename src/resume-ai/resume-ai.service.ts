@@ -348,6 +348,8 @@ export class ResumeAiService {
    */
   async parseResume(parserResumeDto: ParserResumeDto, userId: string) {
     try {
+      //检查当前用户是否存在正在创建的简历
+      await this.checkExistResume(userId);
       const { resumeContent, templateType, templateId } = parserResumeDto;
       //校验简历内容是否合格
       const { isValid, reason } = this.validateResumeContent(resumeContent);
@@ -970,10 +972,10 @@ export class ResumeAiService {
     resumeContent: string,
     currentDate: string,
   ): Promise<any> {
-    const propmt = PromptTemplate.fromTemplate(prompt);
+    const promptTemplate = PromptTemplate.fromTemplate(prompt);
     const model = this.aiService.generateResume();
     const parser = new JsonOutputParser();
-    const chain = propmt.pipe(model).pipe(parser);
+    const chain = promptTemplate.pipe(model).pipe(parser);
 
     const res = await chain.invoke({
       jd: jobDescription,
