@@ -881,7 +881,7 @@ export class ResumeAiService {
   ): Promise<ModuleResult> {
     let lastError: Error | null = null;
 
-    for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
+    for (let attempt = 0; attempt < retryConfig.maxRetries; attempt++) {
       try {
         const data = await this.callAiForModule(
           prompt,
