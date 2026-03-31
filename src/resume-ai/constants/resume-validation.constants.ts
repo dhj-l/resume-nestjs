@@ -1,5 +1,5 @@
 export const RESUME_MIN_LENGTH = 100;
-export const RESUME_MAX_LENGTH = 10000;
+export const RESUME_MAX_LENGTH = 100000;
 
 export const RESUME_MIN_PARAGRAPHS = 3;
 export const RESUME_MIN_LINE_BREAKS = 10;

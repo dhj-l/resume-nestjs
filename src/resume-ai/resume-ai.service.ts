@@ -15,7 +15,6 @@ import { Resume } from 'src/resume/entities/resume.entity';
 import { CreateResumeDto } from 'src/resume/dto/create-resume.dto';
 import { DocumentParserService } from './document-parser.service';
 import {
-  MIN_LENGTH,
   MAX_LENGTH,
   MIN_CHINESE_LENGTH,
   MIN_ENGLISH_LENGTH,
@@ -45,6 +44,15 @@ import {
   hasContactInfo,
   hasNonResumeContent,
 } from './constants/resume-validation.constants';
+import { Observable, Subject, interval, throwError } from 'rxjs';
+import { takeUntil, catchError } from 'rxjs/operators';
+import {
+  SseMessage,
+  ModuleResult,
+  RetryConfig,
+  HeartbeatConfig,
+} from './types/sse.types';
+import { MODULE_PROMPTS, MODULE_EXECUTION_ORDER } from './prompt/modules';
 
 @Injectable()
 export class ResumeAiService {
@@ -112,7 +120,7 @@ export class ResumeAiService {
         userId,
       );
       return resume;
-    } catch (error) {
+    } catch {
       // 捕获异常，更新记录状态为失败
       await this.updateRecordStatus(
         record._id.toString(),
@@ -173,7 +181,7 @@ export class ResumeAiService {
         userId,
       );
       return resume;
-    } catch (error) {
+    } catch {
       // 捕获异常，更新记录状态为失败
       await this.updateRecordStatus(
         record._id.toString(),
@@ -218,7 +226,7 @@ export class ResumeAiService {
         userId,
       );
       return resume;
-    } catch (error) {
+    } catch {
       // 捕获异常，更新记录状态为失败
       await this.updateRecordStatus(id, ResumeAiStatusEnum.Failed);
       throw new BadRequestException('ai创建简历失败');
@@ -341,8 +349,6 @@ export class ResumeAiService {
   async parseResume(parserResumeDto: ParserResumeDto, userId: string) {
     try {
       const { resumeContent, templateType, templateId } = parserResumeDto;
-      //检查当前用户是否存在正在创建的简历
-      await this.checkExistResume(userId);
       //校验简历内容是否合格
       const { isValid, reason } = this.validateResumeContent(resumeContent);
       if (!isValid) {
@@ -632,5 +638,422 @@ export class ResumeAiService {
       score,
       details,
     };
+  }
+
+  /**
+   * SSE生成简历
+   * 使用Server-Sent Events实时推送简历生成进度
+   */
+  generateResumeSse(
+    createAiResuemDto: CreateAiResuemDto,
+    userId: string,
+  ): Observable<SseMessage> {
+    const { jobDescription } = createAiResuemDto;
+    const { isValid, reason } = this.validateJobDescription(jobDescription);
+
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
+
+    // 创建SSE消息Subject
+    const sseSubject = new Subject<SseMessage>();
+    const stopSignal = new Subject<void>();
+
+    // 配置参数
+    const retryConfig: RetryConfig = {
+      maxRetries: 3,
+      retryDelay: 1000,
+      backoffFactor: 2,
+    };
+
+    const heartbeatConfig: HeartbeatConfig = {
+      interval: 30000, // 30秒
+      timeout: 60000, // 60秒
+    };
+
+    // 启动心跳机制
+    this.startHeartbeat(sseSubject, heartbeatConfig, stopSignal);
+
+    // 根据解析类型处理
+    this.processResumeGeneration(
+      createAiResuemDto,
+      userId,
+      sseSubject,
+      stopSignal,
+      retryConfig,
+    ).catch((error: any) => {
+      // 发送错误消息
+      const errorMessage: SseMessage = {
+        type: 'error',
+        moduleName: 'system',
+        status: 'failed',
+        message: error?.message || '简历生成失败',
+        totalModules: MODULE_EXECUTION_ORDER.length,
+        currentModule: 0,
+      };
+      sseSubject.next(errorMessage);
+      sseSubject.error(error);
+      stopSignal.next();
+      stopSignal.complete();
+    });
+
+    return sseSubject.asObservable().pipe(
+      takeUntil(stopSignal),
+      catchError((error) => {
+        console.error('SSE连接错误:', error);
+        return throwError(() => error);
+      }),
+    );
+  }
+
+  /**
+   * 处理简历生成流程
+   */
+  private async processResumeGeneration(
+    createAiResuemDto: CreateAiResuemDto,
+    userId: string,
+    sseSubject: Subject<SseMessage>,
+    stopSignal: Subject<void>,
+    retryConfig: RetryConfig,
+  ): Promise<void> {
+    const { parseType, jobDescription } = createAiResuemDto;
+
+    // 获取简历内容
+    let resumeContent = '';
+    switch (parseType) {
+      case ResumeAiTypeEnum.Manual: {
+        resumeContent = this.parseSupplementary(createAiResuemDto.detailInfo!);
+        break;
+      }
+      case ResumeAiTypeEnum.Upload: {
+        resumeContent = createAiResuemDto.resumeContent!;
+        break;
+      }
+      case ResumeAiTypeEnum.Select: {
+        const resume = await this.resumeModel.findOne({
+          _id: createAiResuemDto.resumeId,
+          userId,
+        });
+        if (!resume) {
+          throw new BadRequestException('不存在该简历');
+        }
+        resumeContent = this.parseSupplementary(resume.toObject());
+        break;
+      }
+      default:
+        throw new BadRequestException('Invalid resume type');
+    }
+
+    // 验证简历内容
+    const { isValid, reason } = this.validateResumeContent(resumeContent);
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
+
+    // 创建数据库记录
+    const record = await this.createRecord(userId, {
+      ...createAiResuemDto,
+      resumeContent,
+    });
+
+    try {
+      // 执行所有模块
+      const moduleResults = await this.executeAllModules(
+        jobDescription,
+        resumeContent,
+        sseSubject,
+        retryConfig,
+      );
+
+      // 聚合结果
+      const aggregatedResult = this.aggregateModuleResults(moduleResults);
+
+      // 创建简历
+      const resume = await this.createResume(
+        aggregatedResult as CreateResumeDto,
+        record.templateType,
+        userId,
+      );
+
+      // 更新记录状态
+      await this.updateRecordStatus(
+        record._id.toString(),
+        ResumeAiStatusEnum.Completed,
+      );
+
+      // 发送完成消息
+      this.sendProgress(
+        sseSubject,
+        'complete',
+        'completed',
+        MODULE_EXECUTION_ORDER.length,
+        MODULE_EXECUTION_ORDER.length,
+        '简历生成完成',
+        0,
+        resume._id.toString(),
+      );
+
+      // 关闭连接
+      stopSignal.next();
+      stopSignal.complete();
+      sseSubject.complete();
+    } catch (error) {
+      // 更新记录状态为失败
+      await this.updateRecordStatus(
+        record._id.toString(),
+        ResumeAiStatusEnum.Failed,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * 执行所有模块
+   */
+  private async executeAllModules(
+    jobDescription: string,
+    resumeContent: string,
+    sseSubject: Subject<SseMessage>,
+    retryConfig: RetryConfig,
+  ): Promise<ModuleResult[]> {
+    const results: ModuleResult[] = [];
+    const currentDate = new Date();
+    const current = `${currentDate.getFullYear()}-${currentDate.getMonth() + 1}-${currentDate.getDate()}`;
+
+    for (let i = 0; i < MODULE_EXECUTION_ORDER.length; i++) {
+      const [moduleName, moduleLabel] = MODULE_EXECUTION_ORDER[i];
+      const moduleConfig = MODULE_PROMPTS[moduleName];
+
+      // 发送开始处理消息
+      this.sendProgress(
+        sseSubject,
+        moduleName,
+        'processing',
+        i + 1,
+        MODULE_EXECUTION_ORDER.length,
+        `正在处理${moduleLabel}模块`,
+      );
+
+      // 执行模块（带重试）
+      const result = await this.executeModuleWithRetry(
+        moduleName,
+        moduleConfig.prompt,
+        jobDescription,
+        resumeContent,
+        current,
+        retryConfig,
+        sseSubject,
+      );
+
+      results.push(result);
+
+      // 发送完成消息
+      if (result.success) {
+        this.sendProgress(
+          sseSubject,
+          moduleName,
+          'completed',
+          i + 1,
+          MODULE_EXECUTION_ORDER.length,
+          `${moduleName}模块处理完成`,
+        );
+      } else {
+        throw new BadRequestException(
+          `模块${moduleName}执行失败: ${result.error}`,
+        );
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * 执行单个模块（带重试机制）
+   */
+  private async executeModuleWithRetry(
+    moduleName: string,
+    prompt: string,
+    jobDescription: string,
+    resumeContent: string,
+    currentDate: string,
+    retryConfig: RetryConfig,
+    sseSubject: Subject<SseMessage>,
+  ): Promise<ModuleResult> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
+      try {
+        const data = await this.callAiForModule(
+          prompt,
+          jobDescription,
+          resumeContent,
+          currentDate,
+        );
+
+        return {
+          moduleName,
+          data,
+          success: true,
+          retryCount: attempt,
+        };
+      } catch (error: any) {
+        lastError = error;
+
+        if (attempt < retryConfig.maxRetries) {
+          // 发送重试消息
+          this.sendProgress(
+            sseSubject,
+            moduleName,
+            'retrying',
+            0,
+            0,
+            `${moduleName}模块重试中 (${attempt + 1}/${retryConfig.maxRetries})`,
+            attempt + 1,
+          );
+
+          // 计算退避延迟
+          const delayTime =
+            retryConfig.retryDelay *
+            Math.pow(retryConfig.backoffFactor, attempt);
+          await this.sleep(delayTime);
+        }
+      }
+    }
+
+    // 所有重试都失败
+    return {
+      moduleName,
+      data: null,
+      success: false,
+      retryCount: retryConfig.maxRetries,
+      error: lastError?.message || '未知错误',
+    };
+  }
+
+  /**
+   * 调用AI模型生成单个模块数据
+   */
+  private async callAiForModule(
+    prompt: string,
+    jobDescription: string,
+    resumeContent: string,
+    currentDate: string,
+  ): Promise<any> {
+    try {
+      // 设置超时时间为60秒
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('AI调用超时')), 60000);
+      });
+
+      const aiCallPromise = this.executeAiCall(
+        prompt,
+        jobDescription,
+        resumeContent,
+        currentDate,
+      );
+
+      // 使用Promise.race实现超时控制
+      const result = await Promise.race([aiCallPromise, timeoutPromise]);
+      return result;
+    } catch (error: any) {
+      console.error(`AI调用失败: ${error}`);
+      throw new BadRequestException('AI调用失败');
+    }
+  }
+
+  /**
+   * 执行AI调用
+   */
+  private async executeAiCall(
+    prompt: string,
+    jobDescription: string,
+    resumeContent: string,
+    currentDate: string,
+  ): Promise<any> {
+    const propmt = PromptTemplate.fromTemplate(prompt);
+    const model = this.aiService.generateResume();
+    const parser = new JsonOutputParser();
+    const chain = propmt.pipe(model).pipe(parser);
+
+    const res = await chain.invoke({
+      jd: jobDescription,
+      experience: resumeContent,
+      current_date: currentDate,
+    });
+
+    return res;
+  }
+
+  /**
+   * 聚合所有模块结果
+   */
+  private aggregateModuleResults(moduleResults: ModuleResult[]): any {
+    const aggregated: any = {};
+
+    for (const result of moduleResults) {
+      if (result.success && result.data) {
+        // 将模块数据添加到聚合对象中
+        Object.assign(aggregated, result.data);
+      }
+    }
+
+    return aggregated;
+  }
+
+  /**
+   * 发送SSE进度消息
+   */
+  private sendProgress(
+    sseSubject: Subject<SseMessage>,
+    moduleName: string,
+    status: 'processing' | 'completed' | 'failed' | 'retrying',
+    currentModule: number,
+    totalModules: number,
+    message?: string,
+    retryCount?: number,
+    recordId?: string,
+  ): void {
+    const sseMessage: SseMessage = {
+      type: 'progress',
+      moduleName,
+      status,
+      message,
+      retryCount,
+      totalModules,
+      currentModule,
+      recordId,
+    };
+
+    sseSubject.next(sseMessage);
+  }
+
+  /**
+   * 启动心跳机制
+   */
+  private startHeartbeat(
+    sseSubject: Subject<SseMessage>,
+    heartbeatConfig: HeartbeatConfig,
+    stopSignal: Subject<void>,
+  ): void {
+    interval(heartbeatConfig.interval)
+      .pipe(takeUntil(stopSignal))
+      .subscribe(() => {
+        const heartbeatMessage: SseMessage = {
+          type: 'heartbeat',
+          moduleName: 'system',
+          status: 'processing',
+          totalModules: 0,
+          currentModule: 0,
+          message: 'heartbeat',
+        };
+        sseSubject.next(heartbeatMessage);
+      });
+  }
+
+  /**
+   * 延迟函数
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

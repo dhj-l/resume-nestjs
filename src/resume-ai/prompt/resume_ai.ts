@@ -1,7 +1,71 @@
 import { generateResumeDescription } from './generated-resume-description.prompt';
 
 /**
- * 简历生成prompt
+ * ============================================================
+ * ⚠️ 重要提示：此prompt已优化拆分为模块化结构
+ * ============================================================
+ *
+ * 为了提高生成效率和可维护性，原有的大型prompt已拆分为多个独立的小型prompt。
+ * 新的模块化prompt位于以下位置：
+ *
+ * 1. 公共约束：src/resume-ai/prompt/common-constraints.ts
+ *    - commonJsonConstraints: JSON格式约束和错误处理机制
+ *    - commonHtmlRules: HTML标签使用规范
+ *    - commonDateFormatRules: 日期格式规范
+ *    - commonSortRules: 排序字段规范
+ *    - commonEnhancementStrategy: 分层次强化策略
+ *
+ * 2. 各模块prompt：src/resume-ai/prompt/modules/
+ *    - basic-info.prompt.ts: 基本信息（basicInfo）模块
+ *    - job-intention.prompt.ts: 求职意向（jobIntention）模块
+ *    - skills.prompt.ts: 技能（skills）模块
+ *    - certificates.prompt.ts: 证书（certificates）模块
+ *    - self-evaluation.prompt.ts: 自我评价（selfEvaluation）模块
+ *    - education-background.prompt.ts: 教育背景（educationBackground）模块
+ *    - work-experience.prompt.ts: 工作经历（workExperience）模块
+ *    - project-experience.prompt.ts: 项目经验（projectExperience）模块
+ *    - campus-experience.prompt.ts: 校园经历（campusExperience）模块
+ *    - internship-experience.prompt.ts: 实习经历（internshipExperience）模块
+ *    - global-style.prompt.ts: 全局样式（globalStyle）模块
+ *
+ * 3. 模块索引：src/resume-ai/prompt/modules/index.ts
+ *    - 导出所有模块prompt
+ *    - 定义模块执行顺序和依赖关系
+ *    - 提供模块化配置
+ *
+ * ============================================================
+ * 使用建议：
+ * ============================================================
+ *
+ * 1. 如果需要生成完整简历：
+ *    - 推荐使用模块化prompt，可以并行执行，提高生成速度
+ *    - 按照MODULE_EXECUTION_ORDER顺序执行各模块
+ *    - 将各模块的JSON结果合并为完整的简历数据
+ *
+ * 2. 如果需要生成单个模块：
+ *    - 直接使用对应模块的prompt
+ *    - 例如：import { basicInfoPrompt } from './modules/basic-info.prompt'
+ *
+ * 3. 如果需要保持原有功能：
+ *    - 本文件保留原有的完整prompt，可继续使用
+ *    - 但建议逐步迁移到模块化结构
+ *
+ * ============================================================
+ * 模块化优势：
+ * ============================================================
+ *
+ * 1. 性能提升：各模块可并行执行，大幅减少生成时间
+ * 2. 可维护性：每个模块独立，便于修改和优化
+ * 3. 灵活性：可根据需求选择生成特定模块
+ * 4. 可扩展性：新增模块不影响现有模块
+ * 5. 可测试性：每个模块可独立测试
+ *
+ * ============================================================
+ */
+
+/**
+ * 简历生成prompt（原始完整版本）
+ * 注意：此prompt已拆分为模块化结构，建议使用模块化prompt以提高性能
  */
 export const resumeAiPrompt = `
 你是一位资深的简历优化顾问，拥有 10 年以上的招聘和职业咨询经验。你擅长将候选人的原始经历与目标岗位的职位描述（JD）进行匹配，生成一份既真实又极具竞争力的简历。
