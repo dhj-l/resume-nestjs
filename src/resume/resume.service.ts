@@ -37,8 +37,11 @@ export class ResumeService implements OnModuleInit {
 
   onModuleInit() {
     try {
+      // 在开发环境和生产环境中，__dirname 分别指向 src/resume 和 dist/src/resume
+      // 我们需要向上一级找到 dist 目录，然后访问 assets 文件夹
       const tailwindPath = join(
         __dirname,
+        '..',
         '..',
         'assets',
         'tailwind.browser.js',

@@ -3,6 +3,10 @@
 /node_modules
 /build
 
+# MCP subproject node_modules
+/mcp/node_modules
+/mcp/dist
+
 # Logs
 logs
 *.log
@@ -57,3 +61,4 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Uploads directory
 /uploads
+

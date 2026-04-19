@@ -7,12 +7,15 @@ import {
   UseGuards,
   Headers,
   Res,
+  Query,
+  Get,
 } from '@nestjs/common';
 import { type Response } from 'express';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 import { SseMessage } from './types/sse.types';
+import { GetResumeRecordsDto } from 'src/resume-ai/dto/get-resume-record.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -107,6 +110,22 @@ export class ResumeAiController {
       });
     } catch (error: any) {
       console.error('SSE初始化错误:', error);
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * 获取简历生成记录
+   */
+  @Get('records')
+  async getResumeRecords(
+    @Req() req: { user: { userId: string } },
+    @Query() query: GetResumeRecordsDto,
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.getResumeRecords(userId, query);
+    } catch (error: any) {
       throw new BadRequestException(error.message);
     }
   }
