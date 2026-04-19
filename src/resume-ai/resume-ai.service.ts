@@ -53,6 +53,7 @@ import {
   HeartbeatConfig,
 } from './types/sse.types';
 import { MODULE_PROMPTS, MODULE_EXECUTION_ORDER } from './prompt/modules';
+import { GetResumeRecordsDto } from './dto/get-resume-record.dto';
 
 @Injectable()
 export class ResumeAiService {
@@ -373,6 +374,25 @@ export class ResumeAiService {
       );
       return result;
     } catch (error) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * 获取简历生成记录
+   */
+  async getResumeRecords(userId: string, query: GetResumeRecordsDto) {
+    try {
+      const { page = 1, pageSize = 10 } = query;
+      const skip = (page - 1) * pageSize;
+      const records = await this.resumeAiModel
+        .find({ userId })
+        .select('-__v')
+        .skip(skip)
+        .limit(pageSize)
+        .sort({ createdAt: -1 });
+      return records;
+    } catch (error: any) {
       throw new BadRequestException(error.message);
     }
   }

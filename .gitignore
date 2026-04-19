@@ -5,6 +5,7 @@
 
 # MCP subproject node_modules
 /mcp/node_modules
+/mcp/dist
 
 # Logs
 logs
