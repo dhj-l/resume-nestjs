@@ -385,13 +385,16 @@ export class ResumeAiService {
     try {
       const { page = 1, pageSize = 10 } = query;
       const skip = (page - 1) * pageSize;
-      const records = await this.resumeAiModel
-        .find({ userId })
-        .select('-__v')
-        .skip(skip)
-        .limit(pageSize)
-        .sort({ createdAt: -1 });
-      return records;
+      const [total, list] = await Promise.all([
+        this.resumeAiModel.countDocuments({ userId }),
+        this.resumeAiModel
+          .find({ userId })
+          .select('-__v -resumeContent -generatedResumeDescription -detailInfo')
+          .skip(skip)
+          .limit(pageSize)
+          .sort({ createdAt: -1 }),
+      ]);
+      return { total, list };
     } catch (error: any) {
       throw new BadRequestException(error.message);
     }
