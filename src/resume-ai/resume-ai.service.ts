@@ -54,12 +54,18 @@ import {
 } from './types/sse.types';
 import { MODULE_PROMPTS, MODULE_EXECUTION_ORDER } from './prompt/modules';
 import { GetResumeRecordsDto } from './dto/get-resume-record.dto';
+import { ResumeEditRecord } from './entities/resume-edit-record.entity';
+import { PolishResumeDto } from './dto/polish-resume.dto';
+import { UndoEditDto } from './dto/undo-edit.dto';
+import { polishContentPrompt } from './prompt/polish-content.prompt';
 
 @Injectable()
 export class ResumeAiService {
   constructor(
     @InjectModel(ResumeAi.name) private resumeAiModel: Model<ResumeAi>,
     @InjectModel(Resume.name) private resumeModel: Model<Resume>,
+    @InjectModel(ResumeEditRecord.name)
+    private editRecordModel: Model<ResumeEditRecord>,
     private readonly aiService: AiService,
     private readonly documentParserService: DocumentParserService,
   ) {}
@@ -1080,5 +1086,230 @@ export class ResumeAiService {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // ==================== AI润色模块 ====================
+
+  /**
+   * 可润色的对象模块key（无需index）
+   */
+  private static readonly OBJECT_POLISH_KEYS = [
+    'skills',
+    'certificates',
+    'selfEvaluation',
+  ];
+
+  /**
+   * 可润色的数组模块key（需要index）
+   */
+  private static readonly ARRAY_POLISH_KEYS = [
+    'educationBackground',
+    'workExperience',
+    'campusExperience',
+    'projectExperience',
+    'internshipExperience',
+  ];
+
+  /**
+   * 所有支持的模块key
+   */
+  private static readonly ALL_POLISH_KEYS = [
+    ...ResumeAiService.OBJECT_POLISH_KEYS,
+    ...ResumeAiService.ARRAY_POLISH_KEYS,
+  ];
+
+  /**
+   * 每个模块中可润色的文本字段
+   */
+  private static readonly POLISHABLE_FIELDS: Record<string, string[]> = {
+    skills: ['content'],
+    certificates: ['content'],
+    selfEvaluation: ['content'],
+    educationBackground: ['content'],
+    workExperience: ['workDescription'],
+    campusExperience: ['content'],
+    projectExperience: ['content'],
+    internshipExperience: ['description'],
+  };
+
+  /**
+   * AI润色简历模块内容
+   */
+  async polishContent(polishResumeDto: PolishResumeDto, userId: string) {
+    const { resumeId, key, index: rawIndex, description } = polishResumeDto;
+
+    // 1. 校验key
+    if (!ResumeAiService.ALL_POLISH_KEYS.includes(key)) {
+      throw new BadRequestException(`不支持的模块key: ${key}`);
+    }
+
+    const isObjectModule = ResumeAiService.OBJECT_POLISH_KEYS.includes(key);
+    const isArrayModule = ResumeAiService.ARRAY_POLISH_KEYS.includes(key);
+
+    if (isArrayModule && rawIndex === undefined) {
+      throw new BadRequestException('数组模块必须提供index参数');
+    }
+    if (isObjectModule && rawIndex !== undefined) {
+      throw new BadRequestException('对象模块不应提供index参数');
+    }
+    const index = rawIndex!;
+
+    // 2. 查询简历并验证归属
+    const selectFields = isArrayModule ? key : `${key}.content`;
+    const resume = await this.resumeModel
+      .findOne({ _id: resumeId, userId })
+      .select(selectFields)
+      .lean();
+    if (!resume) {
+      throw new BadRequestException('简历不存在');
+    }
+
+    // 3. 提取当前内容
+    let beforeContent: string;
+    if (isArrayModule) {
+      const arr = resume[key] as any[];
+      if (!arr || index >= arr.length || index < 0) {
+        throw new BadRequestException(
+          `index超出范围，该模块共有${arr?.length || 0}条记录`,
+        );
+      }
+      const item = arr[index];
+      const textFields = ResumeAiService.POLISHABLE_FIELDS[key];
+      // 取第一个文本字段作为代表
+      beforeContent = item[textFields[0]] || '';
+    } else {
+      const obj = resume[key] as any;
+      beforeContent = obj?.content || '';
+    }
+
+    if (!beforeContent || !beforeContent.trim()) {
+      throw new BadRequestException('该内容为空，无需润色');
+    }
+
+    // 4. 调用AI润色
+    const current = new Date();
+    const currentDate = `${current.getFullYear()}-${current.getMonth() + 1}-${current.getDate()}`;
+
+    const promptTemplate = PromptTemplate.fromTemplate(polishContentPrompt);
+    const model = this.aiService.generateResume();
+    const parser = new JsonOutputParser();
+    const chain = promptTemplate.pipe(model).pipe(parser);
+
+    let aiResult: Record<string, string>;
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('AI润色超时')), 60000);
+      });
+      aiResult = await Promise.race([
+        chain.invoke({
+          current_content: JSON.stringify(
+            isArrayModule ? (resume[key] as any[])[index] : resume[key],
+            null,
+            2,
+          ),
+          module_key: key,
+          description: description || '请对内容进行通用润色优化',
+          current_date: currentDate,
+        }),
+        timeoutPromise,
+      ]);
+      console.log(aiResult);
+    } catch (error: any) {
+      throw new BadRequestException('AI润色失败: ' + error.message);
+    }
+
+    if (!aiResult || Object.keys(aiResult).length === 0) {
+      throw new BadRequestException('AI润色结果为空，请重试');
+    }
+
+    // 5. 将AI结果写回简历
+    const afterContent = beforeContent; // 先保留，下面合并后更新
+    if (isArrayModule) {
+      const updateFields: Record<string, any> = {};
+      for (const [fieldKey, fieldValue] of Object.entries(aiResult)) {
+        updateFields[`${key}.${index}.${fieldKey}`] = fieldValue;
+      }
+      await this.resumeModel.findByIdAndUpdate(resumeId, updateFields);
+    } else {
+      // 对象模块，取第一个文本字段的值
+      const textFields = ResumeAiService.POLISHABLE_FIELDS[key];
+      const fieldKey = textFields[0];
+      const polishedValue = aiResult[fieldKey] || aiResult.content;
+      await this.resumeModel.findByIdAndUpdate(resumeId, {
+        [`${key}.${fieldKey}`]: polishedValue,
+      });
+    }
+
+    // 6. 获取修改后的实际内容用于记录
+    let finalAfterContent: string;
+    if (isArrayModule) {
+      const textFields = ResumeAiService.POLISHABLE_FIELDS[key];
+      finalAfterContent = aiResult[textFields[0]] || '';
+    } else {
+      const textFields = ResumeAiService.POLISHABLE_FIELDS[key];
+      finalAfterContent = aiResult[textFields[0]] || aiResult.content || '';
+    }
+
+    // 7. 创建修改记录
+    const record = await this.editRecordModel.create({
+      resumeId,
+      editKey: key,
+      editIndex: isArrayModule ? index : null,
+      beforeContent,
+      afterContent: finalAfterContent,
+      userId,
+    });
+
+    return {
+      recordId: record._id,
+      beforeContent,
+      afterContent: finalAfterContent,
+    };
+  }
+
+  /**
+   * 撤销AI润色操作
+   */
+  async undoEdit(undoEditDto: UndoEditDto, userId: string) {
+    const { recordId, resumeId } = undoEditDto;
+
+    // 1. 查找并验证编辑记录
+    const record = await this.editRecordModel.findOne({
+      _id: recordId,
+      resumeId,
+      userId,
+    });
+    if (!record) {
+      throw new BadRequestException('编辑记录不存在或无权操作');
+    }
+
+    // 2. 验证简历存在
+    const resume = await this.resumeModel
+      .findOne({ _id: resumeId, userId })
+      .lean();
+    if (!resume) {
+      throw new BadRequestException('简历不存在');
+    }
+
+    // 3. 恢复原始内容
+    const { editKey, editIndex, beforeContent } = record;
+    if (editIndex !== null) {
+      // 数组模块
+      await this.resumeModel.findByIdAndUpdate(resumeId, {
+        [`${editKey}.${editIndex}.${ResumeAiService.POLISHABLE_FIELDS[editKey][0]}`]:
+          beforeContent,
+      });
+    } else {
+      // 对象模块
+      const textFields = ResumeAiService.POLISHABLE_FIELDS[editKey];
+      await this.resumeModel.findByIdAndUpdate(resumeId, {
+        [`${editKey}.${textFields[0]}`]: beforeContent,
+      });
+    }
+
+    // 4. 删除编辑记录
+    await this.editRecordModel.findByIdAndDelete(recordId);
+
+    return { success: true, restoredContent: beforeContent };
   }
 }

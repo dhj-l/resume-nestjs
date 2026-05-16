@@ -16,6 +16,8 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 import { SseMessage } from './types/sse.types';
 import { GetResumeRecordsDto } from 'src/resume-ai/dto/get-resume-record.dto';
+import { PolishResumeDto } from './dto/polish-resume.dto';
+import { UndoEditDto } from './dto/undo-edit.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -126,6 +128,35 @@ export class ResumeAiController {
       const { userId } = req.user;
       return await this.resumeAiService.getResumeRecords(userId, query);
     } catch (error: any) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * AI润色简历模块内容
+   */
+  @Post('polish')
+  async polishContent(
+    @Body() polishResumeDto: PolishResumeDto,
+    @Req() req,
+  ) {
+    try {
+      const { userId } = req.user;
+      return this.resumeAiService.polishContent(polishResumeDto, userId);
+    } catch (error) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * 撤销AI润色操作
+   */
+  @Post('undo')
+  async undoEdit(@Body() undoEditDto: UndoEditDto, @Req() req) {
+    try {
+      const { userId } = req.user;
+      return this.resumeAiService.undoEdit(undoEditDto, userId);
+    } catch (error) {
       throw new BadRequestException(error.message);
     }
   }
