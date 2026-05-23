@@ -134,6 +134,8 @@ export class ResumeAiService {
         record.templateType,
         userId,
       );
+      record.generatedResumeId = resume._id.toString();
+      await record.save();
       return resume;
     } catch {
       // 捕获异常，更新记录状态为失败
@@ -195,6 +197,8 @@ export class ResumeAiService {
         record.templateType,
         userId,
       );
+      record.generatedResumeId = resume._id.toString();
+      await record.save();
       return resume;
     } catch {
       // 捕获异常，更新记录状态为失败
@@ -240,6 +244,8 @@ export class ResumeAiService {
         record.templateType,
         userId,
       );
+      record.generatedResumeId = resume._id.toString();
+      await record.save();
       return resume;
     } catch {
       // 捕获异常，更新记录状态为失败
@@ -813,6 +819,10 @@ export class ResumeAiService {
         record.templateType,
         userId,
       );
+
+      // 保存生成的简历ID
+      record.generatedResumeId = resume._id.toString();
+      await record.save();
 
       // 更新记录状态
       await this.updateRecordStatus(

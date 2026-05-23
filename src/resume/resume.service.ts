@@ -14,6 +14,9 @@ import {
   Template,
   TemplateDocument,
 } from '../template/entities/template.entity';
+import { ResumeAi } from '../resume-ai/entities/resume-ai.entity';
+import { ResumeEditRecord } from '../resume-ai/entities/resume-edit-record.entity';
+import { ResumeAnalysisRecord } from '../resume-ai/entities/resume-analysis-record.entity';
 import { Model, Types } from 'mongoose';
 import puppeteer from 'puppeteer';
 import { readFileSync } from 'fs';
@@ -33,6 +36,11 @@ export class ResumeService implements OnModuleInit {
   constructor(
     @InjectModel(Resume.name) private resumeModel: Model<ResumeDocument>,
     @InjectModel(Template.name) private templateModel: Model<TemplateDocument>,
+    @InjectModel(ResumeAi.name) private resumeAiModel: Model<ResumeAi>,
+    @InjectModel(ResumeEditRecord.name)
+    private editRecordModel: Model<ResumeEditRecord>,
+    @InjectModel(ResumeAnalysisRecord.name)
+    private analysisRecordModel: Model<ResumeAnalysisRecord>,
   ) {}
 
   onModuleInit() {
@@ -397,7 +405,21 @@ export class ResumeService implements OnModuleInit {
       throw new BadRequestException('简历不存在');
     }
 
-    this.logger.log(`用户 ${userId} 成功删除简历 ${id}`);
+    // 级联删除关联的 AI 生成记录、编辑记录、分析记录
+    const [aiResult, editResult, analysisResult] = await Promise.all([
+      this.resumeAiModel.deleteMany({
+        $or: [{ generatedResumeId: id }, { resumeId: id }],
+      }),
+      this.editRecordModel.deleteMany({ resumeId: id }),
+      this.analysisRecordModel.deleteMany({ resumeId: id }),
+    ]);
+
+    this.logger.log(
+      `用户 ${userId} 成功删除简历 ${id}，级联删除: ` +
+        `AI记录${aiResult.deletedCount}条, ` +
+        `编辑记录${editResult.deletedCount}条, ` +
+        `分析记录${analysisResult.deletedCount}条`,
+    );
     return resume;
   }
 
