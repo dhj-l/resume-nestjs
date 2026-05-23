@@ -14,6 +14,7 @@ import { User, UserDocument } from './entities/user.entity';
 import { LoginDto } from './dto/login-dto';
 import { JwtService } from '@nestjs/jwt';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { TokenBlacklistService } from '../auth/token-blacklist.service';
 
 @Injectable()
 export class UserService {
@@ -22,6 +23,7 @@ export class UserService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private jwtService: JwtService,
+    private tokenBlacklistService: TokenBlacklistService,
   ) {}
 
   /**
@@ -145,6 +147,21 @@ export class UserService {
     } catch (error) {
       this.logger.error(
         `登录失败: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+  }
+
+  async logout(token: string) {
+    try {
+      this.logger.log('用户请求退出登录');
+      await this.tokenBlacklistService.addToBlacklist(token);
+      this.logger.log('用户退出登录成功');
+      return { message: '退出登录成功' };
+    } catch (error) {
+      this.logger.error(
+        `退出登录失败: ${(error as Error).message}`,
         (error as Error).stack,
       );
       throw error;

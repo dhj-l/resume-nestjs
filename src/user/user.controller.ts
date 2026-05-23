@@ -47,6 +47,16 @@ export class UserController {
     return this.userService.login(loginDto);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(@Req() req: RequestWithUser) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader?.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : '';
+    return this.userService.logout(token);
+  }
+
   /**
    * 获取所有用户列表(仅管理员)
    * @param req 请求对象,包含用户信息
