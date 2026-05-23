@@ -10,6 +10,10 @@ import {
   ResumeEditRecord,
   ResumeEditRecordSchema,
 } from './entities/resume-edit-record.entity';
+import {
+  ResumeAnalysisRecord,
+  ResumeAnalysisRecordSchema,
+} from './entities/resume-analysis-record.entity';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -21,6 +25,10 @@ import {
       {
         schema: ResumeEditRecordSchema,
         name: ResumeEditRecord.name,
+      },
+      {
+        schema: ResumeAnalysisRecordSchema,
+        name: ResumeAnalysisRecord.name,
       },
     ]),
     AiModule,

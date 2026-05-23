@@ -18,6 +18,7 @@ import { SseMessage } from './types/sse.types';
 import { GetResumeRecordsDto } from 'src/resume-ai/dto/get-resume-record.dto';
 import { PolishResumeDto } from './dto/polish-resume.dto';
 import { UndoEditDto } from './dto/undo-edit.dto';
+import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -136,10 +137,7 @@ export class ResumeAiController {
    * AI润色简历模块内容
    */
   @Post('polish')
-  async polishContent(
-    @Body() polishResumeDto: PolishResumeDto,
-    @Req() req,
-  ) {
+  async polishContent(@Body() polishResumeDto: PolishResumeDto, @Req() req) {
     try {
       const { userId } = req.user;
       return this.resumeAiService.polishContent(polishResumeDto, userId);
@@ -156,6 +154,58 @@ export class ResumeAiController {
     try {
       const { userId } = req.user;
       return this.resumeAiService.undoEdit(undoEditDto, userId);
+    } catch (error) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * AI分析简历与岗位JD的匹配度
+   */
+  @Post('analyze')
+  async analyzeResume(@Body() analyzeResumeDto: AnalyzeResumeDto, @Req() req) {
+    try {
+      const { userId } = req.user;
+      return this.resumeAiService.analyzeResume(analyzeResumeDto, userId);
+    } catch (error) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * 获取简历分析记录列表
+   */
+  @Get('analysis-records')
+  async getAnalysisRecords(
+    @Req() req: { user: { userId: string } },
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.getAnalysisRecords(
+        userId,
+        page ? parseInt(page, 10) : 1,
+        pageSize ? parseInt(pageSize, 10) : 10,
+      );
+    } catch (error: any) {
+      throw new BadRequestException(error.message);
+    }
+  }
+  /**
+   * 获取简历分析详情
+   */
+  @Get('/analysis-detail')
+  async getAnalysisDetail(
+    @Query('id') id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const data = await this.resumeAiService.getAnalysisDetailService(
+        id,
+        req.user.userId,
+      );
+      return data;
     } catch (error) {
       throw new BadRequestException(error.message);
     }

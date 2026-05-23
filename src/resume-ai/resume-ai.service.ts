@@ -58,6 +58,12 @@ import { ResumeEditRecord } from './entities/resume-edit-record.entity';
 import { PolishResumeDto } from './dto/polish-resume.dto';
 import { UndoEditDto } from './dto/undo-edit.dto';
 import { polishContentPrompt } from './prompt/polish-content.prompt';
+import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
+import {
+  ResumeAnalysisRecord,
+  AnalysisStatusEnum,
+} from './entities/resume-analysis-record.entity';
+import { analyzeResumePrompt } from './prompt/analyze-resume.prompt';
 
 @Injectable()
 export class ResumeAiService {
@@ -66,6 +72,8 @@ export class ResumeAiService {
     @InjectModel(Resume.name) private resumeModel: Model<Resume>,
     @InjectModel(ResumeEditRecord.name)
     private editRecordModel: Model<ResumeEditRecord>,
+    @InjectModel(ResumeAnalysisRecord.name)
+    private analysisRecordModel: Model<ResumeAnalysisRecord>,
     private readonly aiService: AiService,
     private readonly documentParserService: DocumentParserService,
   ) {}
@@ -1311,5 +1319,128 @@ export class ResumeAiService {
     await this.editRecordModel.findByIdAndDelete(recordId);
 
     return { success: true, restoredContent: beforeContent };
+  }
+
+  /**
+   * AI分析简历与岗位JD的匹配度
+   */
+  async analyzeResume(analyzeResumeDto: AnalyzeResumeDto, userId: string) {
+    const { resumeId, jobDescription } = analyzeResumeDto;
+
+    // 1. 查询简历并验证归属
+    const resume = await this.resumeModel
+      .findOne({ _id: resumeId, userId })
+      .lean();
+    if (!resume) {
+      throw new BadRequestException('简历不存在');
+    }
+
+    // 2. 创建分析记录
+    const record = await this.analysisRecordModel.create({
+      resumeId,
+      jobDescription,
+      status: AnalysisStatusEnum.Analyzing,
+      userId,
+    });
+
+    try {
+      // 3. 提取简历内容（将简历各模块序列化为文本）
+      const resumeContent = JSON.stringify(
+        {
+          basicInfo: resume.basicInfo,
+          jobIntention: resume.jobIntention,
+          educationBackground: resume.educationBackground,
+          workExperience: resume.workExperience,
+          projectExperience: resume.projectExperience,
+          skills: resume.skills,
+          certificates: resume.certificates,
+          selfEvaluation: resume.selfEvaluation,
+          campusExperience: resume.campusExperience,
+          internshipExperience: resume.internshipExperience,
+        },
+        null,
+        2,
+      );
+
+      // 4. 调用AI分析
+      const current = new Date();
+      const currentDate = `${current.getFullYear()}-${current.getMonth() + 1}-${current.getDate()}`;
+
+      const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
+      const model = this.aiService.generateResume();
+      const parser = new JsonOutputParser();
+      const chain = promptTemplate.pipe(model).pipe(parser);
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('AI分析超时')), 120000);
+      });
+
+      const aiResult = await Promise.race([
+        chain.invoke({
+          jd: jobDescription,
+          experience: resumeContent,
+          current_date: currentDate,
+        }),
+        timeoutPromise,
+      ]);
+
+      if (!aiResult || Object.keys(aiResult).length === 0) {
+        throw new BadRequestException('AI分析结果为空，请重试');
+      }
+
+      // 5. 更新分析记录
+      await this.analysisRecordModel.findByIdAndUpdate(record._id, {
+        status: AnalysisStatusEnum.Completed,
+        analysisResult: aiResult,
+      });
+
+      return {
+        recordId: record._id,
+        analysisResult: aiResult,
+      };
+    } catch (error: any) {
+      // 更新状态为失败
+      await this.analysisRecordModel.findByIdAndUpdate(record._id, {
+        status: AnalysisStatusEnum.Failed,
+      });
+      throw new BadRequestException('AI分析失败: ' + error.message);
+    }
+  }
+
+  /**
+   * 获取用户的简历分析记录列表
+   */
+  async getAnalysisRecords(userId: string, page = 1, pageSize = 10) {
+    const skip = (page - 1) * pageSize;
+    const [records, total] = await Promise.all([
+      this.analysisRecordModel
+        .find({ userId })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean(),
+      this.analysisRecordModel.countDocuments({ userId }),
+    ]);
+
+    return {
+      list: records,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
+  /**
+   * 获取用户的简历分析详情
+   */
+  async getAnalysisDetailService(id: string, userId: string) {
+    const data = await this.analysisRecordModel
+      .findOne({ _id: id, userId })
+      .select('-__v')
+      .lean();
+    if (!data) {
+      throw new BadRequestException('查询不到对应的分析数据');
+    }
+    return data;
   }
 }
