@@ -35,6 +35,19 @@ import {
   ],
   controllers: [ResumeAiController],
   providers: [ResumeAiService, DocumentParserService],
-  exports: [DocumentParserService],
+  exports: [
+    DocumentParserService,
+    MongooseModule.forFeature([
+      { schema: ResumeAiSchema, name: ResumeAi.name },
+      {
+        schema: ResumeEditRecordSchema,
+        name: ResumeEditRecord.name,
+      },
+      {
+        schema: ResumeAnalysisRecordSchema,
+        name: ResumeAnalysisRecord.name,
+      },
+    ]),
+  ],
 })
 export class ResumeAiModule {}

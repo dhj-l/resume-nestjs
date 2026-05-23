@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 import {
   ResumeAi,
@@ -67,6 +67,8 @@ import { analyzeResumePrompt } from './prompt/analyze-resume.prompt';
 
 @Injectable()
 export class ResumeAiService {
+  private readonly logger = new Logger(ResumeAiService.name);
+
   constructor(
     @InjectModel(ResumeAi.name) private resumeAiModel: Model<ResumeAi>,
     @InjectModel(Resume.name) private resumeModel: Model<Resume>,
@@ -128,7 +130,13 @@ export class ResumeAiService {
       );
       // 保存生成的简历ID
       record.generatedResumeId = resume._id.toString();
-      await record.save();
+      try {
+        await record.save();
+      } catch (saveError) {
+        // record.save 失败时，清理已创建的孤立简历
+        await this.resumeModel.findByIdAndDelete(resume._id).catch(() => {});
+        throw saveError;
+      }
       // 修改状态（简历已创建成功后再标记完成）
       await this.updateRecordStatus(
         record._id.toString(),
@@ -187,7 +195,12 @@ export class ResumeAiService {
       );
       // 保存生成的简历ID
       record.generatedResumeId = resume._id.toString();
-      await record.save();
+      try {
+        await record.save();
+      } catch (saveError) {
+        await this.resumeModel.findByIdAndDelete(resume._id).catch(() => {});
+        throw saveError;
+      }
       // 修改状态（简历已创建成功后再标记完成）
       await this.updateRecordStatus(
         record._id.toString(),
@@ -234,7 +247,12 @@ export class ResumeAiService {
       );
       // 保存生成的简历ID
       record.generatedResumeId = resume._id.toString();
-      await record.save();
+      try {
+        await record.save();
+      } catch (saveError) {
+        await this.resumeModel.findByIdAndDelete(resume._id).catch(() => {});
+        throw saveError;
+      }
       // 更新记录状态（简历已创建成功后再标记完成）
       await this.updateRecordStatus(id, ResumeAiStatusEnum.Completed);
       return resume;
@@ -278,7 +296,7 @@ export class ResumeAiService {
    * 创建记录
    */
   async createRecord(userId: string, record: Record<string, any>) {
-    const newRecord = this.resumeAiModel.create({
+    const newRecord = await this.resumeAiModel.create({
       ...record,
       userId,
       status: ResumeAiStatusEnum.Creating,
@@ -1205,9 +1223,13 @@ export class ResumeAiService {
     const chain = promptTemplate.pipe(model).pipe(parser);
 
     let aiResult: Record<string, string>;
+    let timedOut = false;
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('AI润色超时')), 60000);
+        setTimeout(() => {
+          timedOut = true;
+          reject(new Error('AI润色超时'));
+        }, 60000);
       });
       aiResult = await Promise.race([
         chain.invoke({
@@ -1222,7 +1244,6 @@ export class ResumeAiService {
         }),
         timeoutPromise,
       ]);
-      console.log(aiResult);
     } catch (error: any) {
       throw new BadRequestException('AI润色失败: ' + error.message);
     }
@@ -1231,7 +1252,11 @@ export class ResumeAiService {
       throw new BadRequestException('AI润色结果为空，请重试');
     }
 
-    // 5. 将AI结果写回简历
+    // 5. 将AI结果写回简历（仅在未超时时写入，防止后台 AI 完成后静默修改简历）
+    if (timedOut) {
+      throw new BadRequestException('AI润色失败: AI润色超时');
+    }
+
     const afterContent = beforeContent; // 先保留，下面合并后更新
     if (isArrayModule) {
       const updateFields: Record<string, any> = {};
@@ -1328,7 +1353,22 @@ export class ResumeAiService {
   async analyzeResume(analyzeResumeDto: AnalyzeResumeDto, userId: string) {
     const { resumeId, jobDescription } = analyzeResumeDto;
 
-    // 1. 查询简历并验证归属
+    // 1. 校验 JD
+    const { isValid, reason } = this.validateJobDescription(jobDescription);
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
+
+    // 2. 检查并发：同一用户同时只能有一个分析任务在进行
+    const existingAnalysis = await this.analysisRecordModel.findOne({
+      userId,
+      status: AnalysisStatusEnum.Analyzing,
+    });
+    if (existingAnalysis) {
+      throw new BadRequestException('存在正在分析的任务，请稍后重试');
+    }
+
+    // 3. 查询简历并验证归属
     const resume = await this.resumeModel
       .findOne({ _id: resumeId, userId })
       .lean();
@@ -1336,7 +1376,7 @@ export class ResumeAiService {
       throw new BadRequestException('简历不存在');
     }
 
-    // 2. 创建分析记录
+    // 4. 创建分析记录
     const record = await this.analysisRecordModel.create({
       resumeId,
       jobDescription,
@@ -1345,7 +1385,7 @@ export class ResumeAiService {
     });
 
     try {
-      // 3. 提取简历内容（将简历各模块序列化为文本）
+      // 5. 提取简历内容（将简历各模块序列化为文本）
       const resumeContent = JSON.stringify(
         {
           basicInfo: resume.basicInfo,
@@ -1363,7 +1403,7 @@ export class ResumeAiService {
         2,
       );
 
-      // 4. 调用AI分析
+      // 6. 调用AI分析
       const current = new Date();
       const currentDate = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
 
@@ -1372,8 +1412,12 @@ export class ResumeAiService {
       const parser = new JsonOutputParser();
       const chain = promptTemplate.pipe(model).pipe(parser);
 
+      let timedOut = false;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('AI分析超时')), 120000);
+        setTimeout(() => {
+          timedOut = true;
+          reject(new Error('AI分析超时'));
+        }, 120000);
       });
 
       const aiResult = await Promise.race([
@@ -1389,11 +1433,13 @@ export class ResumeAiService {
         throw new BadRequestException('AI分析结果为空，请重试');
       }
 
-      // 5. 更新分析记录
-      await this.analysisRecordModel.findByIdAndUpdate(record._id, {
-        status: AnalysisStatusEnum.Completed,
-        analysisResult: aiResult,
-      });
+      // 7. 更新分析记录（仅在未超时时更新，防止后台 AI 完成后覆写 Failed 状态）
+      if (!timedOut) {
+        await this.analysisRecordModel.findByIdAndUpdate(record._id, {
+          status: AnalysisStatusEnum.Completed,
+          analysisResult: aiResult,
+        });
+      }
 
       return {
         recordId: record._id,
@@ -1408,7 +1454,9 @@ export class ResumeAiService {
       } catch (_) {
         // 状态更新失败不影响错误抛出
       }
-      throw new BadRequestException('AI分析失败: ' + error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(`AI分析失败: ${error.message}`, error.stack);
+      throw new BadRequestException('AI分析失败，请稍后重试');
     }
   }
 

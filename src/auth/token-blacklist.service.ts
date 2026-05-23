@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { createHash } from 'crypto';
 import {
   TokenBlacklist,
   TokenBlacklistDocument,
@@ -15,9 +16,33 @@ export class TokenBlacklistService {
     private tokenBlacklistModel: Model<TokenBlacklistDocument>,
   ) {}
 
-  async addToBlacklist(token: string): Promise<void> {
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private decodeTokenExp(token: string): Date {
     try {
-      await this.tokenBlacklistModel.create({ token });
+      const payload = JSON.parse(
+        Buffer.from(token.split('.')[1], 'base64').toString(),
+      );
+      if (payload.exp) {
+        return new Date(payload.exp * 1000);
+      }
+    } catch {
+      // 解码失败时忽略
+    }
+    // 默认 48 小时后过期
+    return new Date(Date.now() + 172800 * 1000);
+  }
+
+  async addToBlacklist(token: string): Promise<void> {
+    if (!token) {
+      return;
+    }
+    try {
+      const tokenHash = this.hashToken(token);
+      const expiresAt = this.decodeTokenExp(token);
+      await this.tokenBlacklistModel.create({ token, tokenHash, expiresAt });
       this.logger.log('Token added to blacklist');
     } catch (error: any) {
       if (error.code === 11000) {
@@ -30,7 +55,8 @@ export class TokenBlacklistService {
   }
 
   async isBlacklisted(token: string): Promise<boolean> {
-    const entry = await this.tokenBlacklistModel.findOne({ token }).lean();
+    const tokenHash = this.hashToken(token);
+    const entry = await this.tokenBlacklistModel.findOne({ tokenHash }).lean();
     return !!entry;
   }
 }

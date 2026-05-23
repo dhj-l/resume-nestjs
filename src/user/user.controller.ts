@@ -54,6 +54,9 @@ export class UserController {
     const token = authHeader?.startsWith('Bearer ')
       ? authHeader.slice(7)
       : '';
+    if (!token) {
+      return { message: '退出登录成功' };
+    }
     return this.userService.logout(token);
   }
 

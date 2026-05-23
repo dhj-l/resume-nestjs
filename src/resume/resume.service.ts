@@ -134,6 +134,52 @@ export class ResumeService implements OnModuleInit {
   }
 
   /**
+   * 后处理 Puppeteer 页面 DOM，消除固定高度分页导致的空白
+   */
+  private async preparePageForPdf(page: any): Promise<void> {
+    await page.addStyleTag({
+      content: `
+        * {
+          break-inside: auto !important;
+          page-break-inside: auto !important;
+          -webkit-column-break-inside: auto !important;
+        }
+      `,
+    });
+
+    await page.evaluate(() => {
+      const allElements = document.querySelectorAll('*');
+      const a4HeightPx = 1123; // 297mm ≈ 1123px at 96dpi
+
+      for (const el of allElements) {
+        const style = window.getComputedStyle(el);
+        if (
+          style.height &&
+          style.height !== 'auto' &&
+          style.height !== '0px'
+        ) {
+          const heightPx = parseFloat(style.height);
+          if (heightPx >= a4HeightPx * 0.9) {
+            (el as HTMLElement).style.height = 'auto';
+            (el as HTMLElement).style.minHeight = 'auto';
+            (el as HTMLElement).style.overflow = 'visible';
+          }
+        }
+      }
+
+      document.body.style.overflow = 'visible';
+      for (const child of document.body.children) {
+        const htmlChild = child as HTMLElement;
+        const style = window.getComputedStyle(htmlChild);
+        if (style.overflow === 'hidden' || style.overflowX === 'hidden') {
+          htmlChild.style.overflow = 'visible';
+          htmlChild.style.overflowX = 'visible';
+        }
+      }
+    });
+  }
+
+  /**
    * 下载简历 PDF
    * @param downloadResumeDto 包含 html 和 css
    * @returns PDF buffer
@@ -159,6 +205,9 @@ export class ResumeService implements OnModuleInit {
       await page.waitForFunction(() => {
         return document.readyState === 'complete';
       });
+
+      // 后处理 DOM，消除固定高度分页导致的空白
+      await this.preparePageForPdf(page);
 
       // 生成 PDF
       const pdfBuffer = await page.pdf({

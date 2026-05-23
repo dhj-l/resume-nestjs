@@ -21,7 +21,7 @@ import { ResumeAiModule } from './resume-ai/resume-ai.module';
     ResumeModule,
     AuthModule,
     JwtModule.register({
-      secret: 'secretKey',
+      secret: process.env.JWT_SECRET || 'secretKey',
       signOptions: { expiresIn: '2d' },
       global: true,
     }),

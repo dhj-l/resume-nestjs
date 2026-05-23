@@ -5,14 +5,15 @@ export type TokenBlacklistDocument = TokenBlacklist & Document;
 
 @Schema({ timestamps: false })
 export class TokenBlacklist {
-  @Prop({ required: true, unique: true, index: true })
+  @Prop({ required: true })
   token: string;
 
-  @Prop({ default: Date.now })
-  createdAt: Date;
+  @Prop({ required: true, unique: true, index: true })
+  tokenHash: string;
+
+  @Prop({ required: true, index: { expireAfterSeconds: 0 } })
+  expiresAt: Date;
 }
 
 export const TokenBlacklistSchema =
   SchemaFactory.createForClass(TokenBlacklist);
-
-TokenBlacklistSchema.index({ createdAt: 1 }, { expireAfterSeconds: 172800 });

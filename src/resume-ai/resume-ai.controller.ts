@@ -9,6 +9,8 @@ import {
   Res,
   Query,
   Get,
+  Logger,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { type Response } from 'express';
 import { ResumeAiService } from './resume-ai.service';
@@ -20,10 +22,13 @@ import { PolishResumeDto } from './dto/polish-resume.dto';
 import { UndoEditDto } from './dto/undo-edit.dto';
 import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
 import { GetLatestAnalysisDto } from './dto/get-latest-analysis.dto';
+import { GetAnalysisDetailDto } from './dto/get-analysis-detail.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
 export class ResumeAiController {
+  private readonly logger = new Logger(ResumeAiController.name);
+
   constructor(private readonly resumeAiService: ResumeAiService) {}
   @Post('generate')
   async generateResume(
@@ -34,7 +39,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return this.resumeAiService.generateResume(createAiResuemDto, userId);
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
   /**
@@ -46,7 +53,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return this.resumeAiService.parseResume(parserResumeDto, userId);
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
   /**
@@ -130,7 +139,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return await this.resumeAiService.getResumeRecords(userId, query);
     } catch (error: any) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
 
@@ -143,7 +154,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return this.resumeAiService.polishContent(polishResumeDto, userId);
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
 
@@ -156,7 +169,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return this.resumeAiService.undoEdit(undoEditDto, userId);
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
 
@@ -169,7 +184,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return await this.resumeAiService.analyzeResume(analyzeResumeDto, userId);
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
 
@@ -197,25 +214,29 @@ export class ResumeAiController {
         validPageSize,
       );
     } catch (error: any) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
   /**
    * 获取简历分析详情
    */
-  @Get('/analysis-detail')
+  @Get('analysis-detail')
   async getAnalysisDetail(
-    @Query('id') id: string,
+    @Query() dto: GetAnalysisDetailDto,
     @Req() req: { user: { userId: string } },
   ) {
     try {
       const data = await this.resumeAiService.getAnalysisDetailService(
-        id,
+        dto.id,
         req.user.userId,
       );
       return data;
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
 
@@ -233,7 +254,9 @@ export class ResumeAiController {
         req.user.userId,
       );
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
 }
