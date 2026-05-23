@@ -1453,4 +1453,16 @@ export class ResumeAiService {
     }
     return data;
   }
+
+  async getLatestAnalysisByResumeId(resumeId: string, userId: string) {
+    const data = await this.analysisRecordModel
+      .findOne({ resumeId, userId })
+      .sort({ createdAt: -1 })
+      .select('-__v')
+      .lean();
+    if (!data) {
+      throw new BadRequestException('未找到该简历的AI分析记录');
+    }
+    return data;
+  }
 }

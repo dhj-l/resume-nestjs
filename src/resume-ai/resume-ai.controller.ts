@@ -19,6 +19,7 @@ import { GetResumeRecordsDto } from 'src/resume-ai/dto/get-resume-record.dto';
 import { PolishResumeDto } from './dto/polish-resume.dto';
 import { UndoEditDto } from './dto/undo-edit.dto';
 import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
+import { GetLatestAnalysisDto } from './dto/get-latest-analysis.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -206,6 +207,24 @@ export class ResumeAiController {
         req.user.userId,
       );
       return data;
+    } catch (error) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * 查询简历最近一次的AI分析
+   */
+  @Get('latest-analysis')
+  async getLatestAnalysis(
+    @Query() dto: GetLatestAnalysisDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.resumeAiService.getLatestAnalysisByResumeId(
+        dto.resumeId,
+        req.user.userId,
+      );
     } catch (error) {
       throw new BadRequestException(error.message);
     }
