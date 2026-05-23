@@ -405,21 +405,28 @@ export class ResumeService implements OnModuleInit {
       throw new BadRequestException('简历不存在');
     }
 
-    // 级联删除关联的 AI 生成记录、编辑记录、分析记录
-    const [aiResult, editResult, analysisResult] = await Promise.all([
-      this.resumeAiModel.deleteMany({
-        $or: [{ generatedResumeId: id }, { resumeId: id }],
-      }),
-      this.editRecordModel.deleteMany({ resumeId: id }),
-      this.analysisRecordModel.deleteMany({ resumeId: id }),
-    ]);
+    this.logger.log(`用户 ${userId} 成功删除简历 ${id}`);
 
-    this.logger.log(
-      `用户 ${userId} 成功删除简历 ${id}，级联删除: ` +
-        `AI记录${aiResult.deletedCount}条, ` +
-        `编辑记录${editResult.deletedCount}条, ` +
-        `分析记录${analysisResult.deletedCount}条`,
-    );
+    // 级联删除关联的 AI 生成记录、编辑记录、分析记录（尽力而为，不阻塞主删除结果）
+    try {
+      const [aiResult, editResult, analysisResult] = await Promise.all([
+        this.resumeAiModel.deleteMany({
+          $or: [{ generatedResumeId: id }, { resumeId: id }],
+        }),
+        this.editRecordModel.deleteMany({ resumeId: id }),
+        this.analysisRecordModel.deleteMany({ resumeId: id }),
+      ]);
+      this.logger.log(
+        `级联删除完成: AI记录${aiResult.deletedCount}条, ` +
+          `编辑记录${editResult.deletedCount}条, ` +
+          `分析记录${analysisResult.deletedCount}条`,
+      );
+    } catch (cascadeError) {
+      this.logger.error(
+        `级联删除关联记录失败（简历 ${id} 已删除）: ${(cascadeError as Error).message}`,
+      );
+    }
+
     return resume;
   }
 

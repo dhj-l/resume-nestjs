@@ -167,7 +167,7 @@ export class ResumeAiController {
   async analyzeResume(@Body() analyzeResumeDto: AnalyzeResumeDto, @Req() req) {
     try {
       const { userId } = req.user;
-      return this.resumeAiService.analyzeResume(analyzeResumeDto, userId);
+      return await this.resumeAiService.analyzeResume(analyzeResumeDto, userId);
     } catch (error) {
       throw new BadRequestException(error.message);
     }
@@ -184,10 +184,17 @@ export class ResumeAiController {
   ) {
     try {
       const { userId } = req.user;
+      const parsedPage = page ? parseInt(page, 10) : 1;
+      const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
+      const validPage = Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPageSize =
+        Number.isNaN(parsedPageSize) || parsedPageSize < 1
+          ? 10
+          : Math.min(parsedPageSize, 100);
       return await this.resumeAiService.getAnalysisRecords(
         userId,
-        page ? parseInt(page, 10) : 1,
-        pageSize ? parseInt(pageSize, 10) : 10,
+        validPage,
+        validPageSize,
       );
     } catch (error: any) {
       throw new BadRequestException(error.message);

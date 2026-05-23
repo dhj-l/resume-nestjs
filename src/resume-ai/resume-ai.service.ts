@@ -120,22 +120,20 @@ export class ResumeAiService {
     });
     try {
       const res = await this.createResumeByAi(jobDescription, resumeContent!);
-      //修改状态
-      await this.updateRecordStatus(
-        record._id.toString(),
-        ResumeAiStatusEnum.Completed,
-      );
-      //TODO:后续创建专门的函数处理
-      // record.generatedResumeDescription = res.generatedResumeDescription;
-      // await record.save();
       //根据res创建简历
       const resume = await this.createResume(
         res as CreateResumeDto,
         record.templateType,
         userId,
       );
+      // 保存生成的简历ID
       record.generatedResumeId = resume._id.toString();
       await record.save();
+      // 修改状态（简历已创建成功后再标记完成）
+      await this.updateRecordStatus(
+        record._id.toString(),
+        ResumeAiStatusEnum.Completed,
+      );
       return resume;
     } catch {
       // 捕获异常，更新记录状态为失败
@@ -181,24 +179,20 @@ export class ResumeAiService {
     });
     try {
       const res = await this.createResumeByAi(jobDescription, content);
-      //修改状态
-      await this.updateRecordStatus(
-        record._id.toString(),
-        ResumeAiStatusEnum.Completed,
-      );
-      //TODO:后续创建专门的函数处理
-      // record.generatedResumeDescription = res.generatedResumeDescription;
-      // await record.save();
-      // 保存记录
-      await record.save();
       //根据res创建简历
       const resume = await this.createResume(
         res as CreateResumeDto,
         record.templateType,
         userId,
       );
+      // 保存生成的简历ID
       record.generatedResumeId = resume._id.toString();
       await record.save();
+      // 修改状态（简历已创建成功后再标记完成）
+      await this.updateRecordStatus(
+        record._id.toString(),
+        ResumeAiStatusEnum.Completed,
+      );
       return resume;
     } catch {
       // 捕获异常，更新记录状态为失败
@@ -232,20 +226,17 @@ export class ResumeAiService {
     try {
       //调用 AI 模型创建简历
       const res = await this.createResumeByAi(jobDescription, content);
-      // 更新记录状态为已完成
-      await this.updateRecordStatus(id, ResumeAiStatusEnum.Completed);
-      //TODO:后续创建专门的函数处理
-      // record.generatedResumeDescription = res.generatedResumeDescription;
-      // // 保存记录
-      // await record.save();
       //根据res创建简历
       const resume = await this.createResume(
         res as CreateResumeDto,
         record.templateType,
         userId,
       );
+      // 保存生成的简历ID
       record.generatedResumeId = resume._id.toString();
       await record.save();
+      // 更新记录状态（简历已创建成功后再标记完成）
+      await this.updateRecordStatus(id, ResumeAiStatusEnum.Completed);
       return resume;
     } catch {
       // 捕获异常，更新记录状态为失败
@@ -334,7 +325,7 @@ export class ResumeAiService {
       const parser = new JsonOutputParser();
       const chain = propmt.pipe(model).pipe(parser);
       const date = new Date();
-      const current = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+      const current = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
       const res = await chain.invoke({
         jd,
         experience: content,
@@ -382,7 +373,7 @@ export class ResumeAiService {
       const parser = new JsonOutputParser();
       const chain = prompt.pipe(model).pipe(parser);
       const date = new Date();
-      const current = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+      const current = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
       const res = await chain.invoke({
         resume_text: resumeContent,
         current_date: current,
@@ -867,7 +858,7 @@ export class ResumeAiService {
   ): Promise<ModuleResult[]> {
     const results: ModuleResult[] = [];
     const currentDate = new Date();
-    const current = `${currentDate.getFullYear()}-${currentDate.getMonth() + 1}-${currentDate.getDate()}`;
+    const current = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
 
     for (let i = 0; i < MODULE_EXECUTION_ORDER.length; i++) {
       const [moduleName, moduleLabel] = MODULE_EXECUTION_ORDER[i];
@@ -1206,7 +1197,7 @@ export class ResumeAiService {
 
     // 4. 调用AI润色
     const current = new Date();
-    const currentDate = `${current.getFullYear()}-${current.getMonth() + 1}-${current.getDate()}`;
+    const currentDate = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
 
     const promptTemplate = PromptTemplate.fromTemplate(polishContentPrompt);
     const model = this.aiService.generateResume();
@@ -1374,7 +1365,7 @@ export class ResumeAiService {
 
       // 4. 调用AI分析
       const current = new Date();
-      const currentDate = `${current.getFullYear()}-${current.getMonth() + 1}-${current.getDate()}`;
+      const currentDate = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
 
       const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
       const model = this.aiService.generateResume();
@@ -1409,10 +1400,14 @@ export class ResumeAiService {
         analysisResult: aiResult,
       };
     } catch (error: any) {
-      // 更新状态为失败
-      await this.analysisRecordModel.findByIdAndUpdate(record._id, {
-        status: AnalysisStatusEnum.Failed,
-      });
+      // 更新状态为失败（尽力而为，不掩盖原始错误）
+      try {
+        await this.analysisRecordModel.findByIdAndUpdate(record._id, {
+          status: AnalysisStatusEnum.Failed,
+        });
+      } catch (_) {
+        // 状态更新失败不影响错误抛出
+      }
       throw new BadRequestException('AI分析失败: ' + error.message);
     }
   }
