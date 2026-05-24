@@ -3,7 +3,16 @@
     "allow": [
       "Bash(npx nest *)",
       "Bash(npx tsc *)",
-      "Bash(killall node *)"
+      "Bash(killall node *)",
+      "Bash(grep *)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+      "Read(//c/Users/dhj/**)",
+      "Bash(ls -la .claude/plugins/)",
+      "Bash(ls -la .claude/plugin*/)",
+      "Bash(find .claude -name \"*.json\" -path \"*/brave*\")",
+      "Bash(find .claude -name \"*.json\" -path \"*/plugin*\")",
+      "Bash(echo \"Exit code: $?\")"
     ]
   }
 }
