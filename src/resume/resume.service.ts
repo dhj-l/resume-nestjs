@@ -110,6 +110,23 @@ export class ResumeService implements OnModuleInit {
     return result;
   }
 
+  /**
+   * 清洗从数据库查出的简历数据，兼容旧格式
+   * 将 skills/certificates/selfEvaluation 从字符串转换为嵌入式对象
+   */
+  private sanitizeResumeData(data: any) {
+    const result = { ...data };
+    const embedFields = ['skills', 'certificates', 'selfEvaluation'] as const;
+
+    for (const field of embedFields) {
+      if (typeof result[field] === 'string') {
+        result[field] = { content: result[field], globalSort: 0 };
+      }
+    }
+
+    return result;
+  }
+
   private getContent(html: string, css: string) {
     return `
         <!DOCTYPE html>
@@ -153,11 +170,7 @@ export class ResumeService implements OnModuleInit {
 
       for (const el of allElements) {
         const style = window.getComputedStyle(el);
-        if (
-          style.height &&
-          style.height !== 'auto' &&
-          style.height !== '0px'
-        ) {
+        if (style.height && style.height !== 'auto' && style.height !== '0px') {
           const heightPx = parseFloat(style.height);
           if (heightPx >= a4HeightPx * 0.9) {
             (el as HTMLElement).style.height = 'auto';
@@ -268,11 +281,14 @@ export class ResumeService implements OnModuleInit {
         throw new NotFoundException('模板关联的简历原始数据已丢失');
       }
 
+      // 清洗旧格式数据，兼容 schema 变更前创建的模板
+      const sanitizedData = this.sanitizeResumeData(resumeData);
+
       // 创建新简历
       const newResume = await this.resumeModel.create({
-        ...resumeData,
-        type: resumeData.type || 'default',
-        title: title || `${resumeData.title} (副本)`,
+        ...sanitizedData,
+        type: sanitizedData.type || 'default',
+        title: title || `${sanitizedData.title} (副本)`,
         userId,
         user: new Types.ObjectId(userId),
         isTemplate: false,

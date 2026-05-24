@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types, ClientSession } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 import { Template } from './entities/template.entity';
@@ -28,15 +28,11 @@ export class TemplateService {
 
   /**
    * 创建模板
-   * 使用事务处理确保数据一致性，防止并发竞态条件
    * @param createTemplateDto 创建模板DTO
    * @param userId 用户ID
    * @returns 创建的模板
    */
   async create(createTemplateDto: CreateTemplateDto, userId: string) {
-    const session: ClientSession = await this.templateModel.startSession();
-    session.startTransaction();
-
     try {
       this.logger.log(`用户 ${userId} 尝试创建模板: ${createTemplateDto.name}`);
 
@@ -55,37 +51,24 @@ export class TemplateService {
       await this.resumeModel.findByIdAndUpdate(
         createTemplateDto.resumeId,
         { isTemplate: true },
-        { session },
       );
 
       // 创建模板记录
       const template = await this.templateModel
-        .create(
-          [
-            {
-              ...createTemplateDto,
-              resume: new Types.ObjectId(createTemplateDto.resumeId),
-              userId,
-            },
-          ],
-          { session },
-        )
-        .catch((error) => {
-          throw error;
+        .create({
+          ...createTemplateDto,
+          resume: new Types.ObjectId(createTemplateDto.resumeId),
+          userId,
         });
 
-      await session.commitTransaction();
-      this.logger.log(`模板创建成功: ${template[0]._id.toString()}`);
-      return template[0];
+      this.logger.log(`模板创建成功: ${template._id.toString()}`);
+      return template;
     } catch (error) {
-      await session.abortTransaction();
       this.logger.error(
         `创建模板失败: ${(error as Error).message}`,
         (error as Error).stack,
       );
       throw error;
-    } finally {
-      void session.endSession();
     }
   }
 
@@ -209,22 +192,17 @@ export class TemplateService {
 
   /**
    * 删除模板
-   * 使用事务处理确保数据一致性
    * @param id 模板ID
    * @param userId 用户ID
    * @returns 删除的模板
    */
   async remove(id: string, userId: string) {
-    const session: ClientSession = await this.templateModel.startSession();
-    session.startTransaction();
-
     try {
       this.logger.log(`用户 ${userId} 尝试删除模板: ${id}`);
 
       // 查询模板并验证权限
       const template = await this.templateModel
-        .findOne({ _id: id, userId })
-        .session(session);
+        .findOne({ _id: id, userId });
 
       if (!template) {
         throw new NotFoundException('模板不存在或无权删除');
@@ -234,30 +212,21 @@ export class TemplateService {
       await this.resumeModel.findByIdAndUpdate(
         template.resumeId,
         { isTemplate: false },
-        { session },
       );
 
       // 删除模板
       const deletedTemplate = await this.templateModel
         .findByIdAndDelete(id)
-        .session(session)
-        .exec()
-        .catch((error) => {
-          throw error;
-        });
+        .exec();
 
-      await session.commitTransaction();
       this.logger.log(`模板删除成功: ${id}`);
       return deletedTemplate;
     } catch (error) {
-      await session.abortTransaction();
       this.logger.error(
         `删除模板失败: ${(error as Error).message}`,
         (error as Error).stack,
       );
       throw error;
-    } finally {
-      void session.endSession();
     }
   }
 }
