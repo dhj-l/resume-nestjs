@@ -15,6 +15,7 @@ import { UploadModule } from './common/upload/upload.module';
 import { TemplateModule } from './template/template.module';
 import { AiModule } from './ai/ai.module';
 import { ResumeAiModule } from './resume-ai/resume-ai.module';
+import { GiteeAuthModule } from './gitee-auth/gitee-auth.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { ResumeAiModule } from './resume-ai/resume-ai.module';
     TemplateModule,
     AiModule,
     ResumeAiModule,
+    GiteeAuthModule,
   ],
   controllers: [AppController],
   providers: [
