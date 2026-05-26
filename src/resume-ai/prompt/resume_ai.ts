@@ -1,5 +1,3 @@
-import { generateResumeDescription } from './generated-resume-description.prompt';
-
 /**
  * ============================================================
  * ⚠️ 重要提示：此prompt已优化拆分为模块化结构
@@ -136,7 +134,7 @@ JSON 结构示例
     "globalSort": 7
   }},
   "selfEvaluation": {{
-    "content": "<p>热爱技术，善于钻研，具备良好的团队协作能力<span style=\"background-color: rgb(140, 140, 140);\">和抗压能力。</span></p>",
+    "content": "<p>热爱技术，善于钻研，具备良好的团队协作能力<span style="background-color: rgb(140, 140, 140);">和抗压能力。</span></p>",
     "globalSort": 8
   }},
   "educationBackground": [
@@ -520,7 +518,7 @@ JSON 结构示例
     “globalSort”: 7
   }},
   “selfEvaluation”: {{
-    “content”: “<p>热爱技术，善于钻研，具备良好的团队协作能力<span style=\”background-color: rgb(140, 140, 140);\”>和抗压能力。</span></p>”,
+    “content”: “<p>热爱技术，善于钻研，具备良好的团队协作能力<span style="background-color: rgb(140, 140, 140);">和抗压能力。</span></p>”,
     “globalSort”: 8
   }},
   “educationBackground”: [
