@@ -5,14 +5,17 @@ import {
   UploadedFile,
   BadRequestException,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import { type Express } from 'express';
 import { type Request } from 'express';
 import { DocumentParserService } from 'src/resume-ai/document-parser.service';
+import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 
 @Controller('upload')
+@UseGuards(JwtAuthGuard)
 export class UploadController {
   constructor(
     private readonly documentParserService: DocumentParserService,
