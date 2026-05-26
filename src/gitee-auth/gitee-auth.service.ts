@@ -43,6 +43,9 @@ export class GiteeAuthService {
       clientSecret: configService.getOrThrow<string>('GITEE_CLIENT_SECRET'),
       redirectUri: configService.getOrThrow<string>('GITEE_REDIRECT_URI'),
       scope: configService.get<string>('GITEE_SCOPE') || 'user_info',
+      frontendCallbackUrl: configService.getOrThrow<string>(
+        'GITEE_FRONTEND_CALLBACK_URL',
+      ),
     };
 
     // 初始化令牌加密密钥（生产环境必须配置，开发环境自动生成）
@@ -176,6 +179,15 @@ export class GiteeAuthService {
     Reflect.deleteProperty(userObject, 'password');
 
     return { token, user: userObject };
+  }
+
+  /**
+   * 获取前端 OAuth 回调页地址
+   *
+   * 后端处理完 OAuth 后 302 重定向到此地址，token 通过 URL fragment 传递。
+   */
+  getFrontendCallbackUrl(): string {
+    return this.config.frontendCallbackUrl;
   }
 
   /**

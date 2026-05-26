@@ -63,4 +63,6 @@ export interface GiteeOAuthConfig {
   clientSecret: string;
   redirectUri: string;
   scope: string;
+  /** 前端 OAuth 回调页地址，后端处理完 OAuth 后 302 重定向到此页面 */
+  frontendCallbackUrl: string;
 }
