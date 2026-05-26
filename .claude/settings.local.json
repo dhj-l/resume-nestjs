@@ -12,7 +12,9 @@
       "Bash(ls -la .claude/plugin*/)",
       "Bash(find .claude -name \"*.json\" -path \"*/brave*\")",
       "Bash(find .claude -name \"*.json\" -path \"*/plugin*\")",
-      "Bash(echo \"Exit code: $?\")"
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(node *)",
+      "Bash(npx eslint *)"
     ]
   }
 }

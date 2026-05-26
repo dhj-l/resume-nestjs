@@ -16,7 +16,12 @@ export enum AiFunctionEnum {
 
 @Schema({ timestamps: true })
 export class AiUsageRecord {
-  @Prop({ type: SchemaTypes.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({
+    type: SchemaTypes.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true,
+  })
   userId: Types.ObjectId;
 
   @Prop({ required: true, enum: AiFunctionEnum, index: true })

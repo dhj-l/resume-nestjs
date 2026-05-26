@@ -1401,7 +1401,10 @@ export class ResumeAiService {
       success: true,
       duration: Date.now() - aiStartTime,
       resumeId,
-      metadata: { polishKey: key, editIndex: isArrayModule ? index : undefined },
+      metadata: {
+        polishKey: key,
+        editIndex: isArrayModule ? index : undefined,
+      },
     });
 
     return {

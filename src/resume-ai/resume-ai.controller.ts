@@ -5,7 +5,6 @@ import {
   Post,
   Req,
   UseGuards,
-  Headers,
   Res,
   Query,
   Get,
@@ -203,7 +202,8 @@ export class ResumeAiController {
       const { userId } = req.user;
       const parsedPage = page ? parseInt(page, 10) : 1;
       const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
-      const validPage = Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPage =
+        Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
       const validPageSize =
         Number.isNaN(parsedPageSize) || parsedPageSize < 1
           ? 10
@@ -297,9 +297,7 @@ export class ResumeAiController {
    * 获取AI使用统计
    */
   @Get('usage-stats')
-  async getUsageStats(
-    @Req() req: { user: { userId: string } },
-  ) {
+  async getUsageStats(@Req() req: { user: { userId: string } }) {
     try {
       const { userId } = req.user;
       return await this.resumeAiService.getUsageStats(userId);

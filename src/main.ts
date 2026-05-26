@@ -14,7 +14,8 @@ async function bootstrap() {
   app.use(helmet());
 
   // 跨域白名单 — 通过 CORS_ORIGINS 环境变量配置，逗号分隔
-  const corsOrigins = config.get<string>('CORS_ORIGINS')
+  const corsOrigins = config
+    .get<string>('CORS_ORIGINS')
     ?.split(',')
     .map((s) => s.trim())
     .filter(Boolean) ?? ['http://localhost:5173'];
