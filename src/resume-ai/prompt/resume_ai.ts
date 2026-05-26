@@ -495,7 +495,7 @@ campusExperience 用于填写在校期间的课外活动、社团任职、竞赛
 /**
  * 文本解析prompt
  */
-export const ContentPromt = `
+export const ContentPrompt = `
 你是一位简历解析专家，将非结构化的自由文本简历转换为结构化 JSON。你的角色是”解析器”而非”优化师”——只提取用户输入中已有的信息，严禁编造、润色、补充或推断任何内容。
 
 【核心原则：纯提取模式】

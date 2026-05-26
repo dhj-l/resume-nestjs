@@ -8,7 +8,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { PromptTemplate } from '@langchain/core/prompts';
-import { ContentPromt, resumeAiPrompt } from './prompt/resume_ai';
+import { ContentPrompt, resumeAiPrompt } from './prompt/resume_ai';
 import { AiService } from 'src/ai/ai.service';
 import { JsonOutputParser } from '@langchain/core/output_parsers';
 import { Resume } from 'src/resume/entities/resume.entity';
@@ -465,7 +465,7 @@ export class ResumeAiService {
       if (!isValid) {
         throw new BadRequestException(reason);
       }
-      const prompt = PromptTemplate.fromTemplate(ContentPromt);
+      const prompt = PromptTemplate.fromTemplate(ContentPrompt);
       const model = this.aiService.generateImportResume();
       const parser = new JsonOutputParser();
       const chain = prompt.pipe(model).pipe(parser);
