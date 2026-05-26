@@ -98,6 +98,12 @@ export class UserService {
         );
       }
 
+      // OAuth 注册用户未设置密码，无法通过邮箱+密码方式登录
+      if (!user.password) {
+        this.logger.warn(`登录失败: 该账户未设置密码（OAuth注册） - ${email}`);
+        throw new BadRequestException('该账户通过第三方平台注册，请使用第三方登录');
+      }
+
       const passwordMatch = await bcrypt.compare(password, user.password);
       if (!passwordMatch) {
         // 增加登录失败次数
@@ -350,6 +356,12 @@ export class UserService {
       if (!user) {
         this.logger.warn(`修改密码失败: 用户不存在 - ${userId}`);
         throw new NotFoundException('用户不存在');
+      }
+
+      // OAuth 注册用户未设置密码，无法通过旧密码校验方式修改密码
+      if (!user.password) {
+        this.logger.warn(`修改密码失败: 该账户未设置密码（OAuth注册） - ${userId}`);
+        throw new BadRequestException('该账户通过第三方平台注册，未设置密码，无法修改');
       }
 
       const match = await bcrypt.compare(dto.oldPassword, user.password);
