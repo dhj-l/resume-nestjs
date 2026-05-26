@@ -14,7 +14,9 @@
       "Bash(find .claude -name \"*.json\" -path \"*/plugin*\")",
       "Bash(echo \"Exit code: $?\")",
       "Bash(node *)",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm test *)"
     ]
   }
 }
