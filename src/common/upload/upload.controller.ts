@@ -4,35 +4,47 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ConfigService } from '@nestjs/config';
 import { type Express } from 'express';
+import { type Request } from 'express';
 import { DocumentParserService } from 'src/resume-ai/document-parser.service';
 
 @Controller('upload')
 export class UploadController {
-  constructor(private readonly documentParserService: DocumentParserService) {}
+  constructor(
+    private readonly documentParserService: DocumentParserService,
+    private readonly config: ConfigService,
+  ) {}
+
   @Post('image')
   @UseInterceptors(FileInterceptor('file'))
   uploadFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new BadRequestException('File is required');
     }
-    // Return relative path (URL)
-    // Assuming we serve static files under /uploads prefix
     return {
       url: `/uploads/${file.filename}`,
     };
   }
+
   @Post('resume')
   @UseInterceptors(FileInterceptor('file'))
-  async uploadResume(@UploadedFile() file: Express.Multer.File) {
+  async uploadResume(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: Request,
+  ) {
     if (!file) {
       throw new BadRequestException('File is required');
     }
-    //TODO: 后续将硬编码替换成环境变量
-    const url = `http://localhost:3000/uploads/${file.filename}`;
-    //解析
+
+    const baseUrl =
+      this.config.get<string>('BASE_URL') ||
+      `${req.protocol}://${req.get('host')}`;
+
+    const url = `${baseUrl}/uploads/${file.filename}`;
     const res = await this.documentParserService.parserDocument(url);
     return res;
   }
