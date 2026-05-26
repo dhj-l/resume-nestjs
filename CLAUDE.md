@@ -84,3 +84,49 @@ AppModule
 ### 部署
 
 项目支持多种部署方式：Vercel (vercel.json)、Railway (railway.json)、Docker (Dockerfile)。详见 `DEPLOYMENT.md`。
+
+## 编码规范与约束
+
+### 包管理器
+
+- **pnpm**，禁止使用 npm 或 yarn
+
+### 测试框架
+
+- **Jest + ts-jest**，配合 `@nestjs/testing` 的 `Test.createTestingModule` 构建测试模块
+- 单元测试文件命名：`*.spec.ts`，位于 `src/` 下与被测文件同目录
+- E2E 测试文件命名：`*.e2e-spec.ts`，位于 `test/` 目录
+- Mock 模式：手动构造 mock 对象，通过 `useValue` 注入 providers
+
+### 测试命令
+
+| 命令 | 用途 |
+|------|------|
+| `pnpm test` | 运行单元测试 |
+| `pnpm test:e2e` | 运行 E2E 测试 |
+| `pnpm test:cov` | 运行测试并输出覆盖率 |
+| `pnpm test:watch` | watch 模式运行 |
+
+### 代码风格
+
+| 规则 | 配置 |
+|------|------|
+| 引号 | 单引号（Prettier `singleQuote: true`） |
+| 分号 | 保留分号（Prettier 默认） |
+| 缩进 | 2 个空格（Prettier 默认） |
+| 尾逗号 | 全部添加（Prettier `trailingComma: "all"`） |
+| 行尾符 | `auto`（ESLint `endOfLine: 'auto'`） |
+| 编译目标 | ES2023，NodeNext ESM 模块 |
+| 类型严格性 | `strictNullChecks: true`，`noImplicitAny: false` |
+
+### 架构硬性约束
+
+1. **外部 API 封装** — 所有外部 AI API 调用必须通过 `AiModule`（`src/ai/`）封装，其他模块禁止直接调用外部 AI 服务。当前使用 DeepSeek + LangChain。
+
+2. **统一响应格式不可绕过** — 全局 `ResponseInterceptor` 将所有成功响应包装为 `{ code, message, data, timestamp, path }`；`AllExceptionsFilter` 统一所有异常为相同格式。控制器不应自行构造响应结构。
+
+3. **环境变量统一入口** — `ConfigModule.forRoot({ isGlobal: true })`，所有配置通过 `ConfigService` 读取，禁止直接使用 `process.env`。
+
+4. **Token 黑名单登出** — 用户登出时 Token 写入黑名单集合（`TokenBlacklist`），`JwtStrategy` 验证时检查黑名单，而非依赖 Token 自然过期。
+
+5. **文件上传为磁盘存储** — Multer 直接写入项目根 `uploads/` 目录，通过 `/uploads/` 路径静态托管。生产环境需注意无服务器平台（如 Vercel）不支持持久化文件存储。
