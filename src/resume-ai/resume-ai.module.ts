@@ -14,6 +14,10 @@ import {
   ResumeAnalysisRecord,
   ResumeAnalysisRecordSchema,
 } from './entities/resume-analysis-record.entity';
+import {
+  AiUsageRecord,
+  AiUsageRecordSchema,
+} from './entities/ai-usage-record.entity';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -29,6 +33,10 @@ import {
       {
         schema: ResumeAnalysisRecordSchema,
         name: ResumeAnalysisRecord.name,
+      },
+      {
+        schema: AiUsageRecordSchema,
+        name: AiUsageRecord.name,
       },
     ]),
     AiModule,
@@ -46,6 +54,10 @@ import {
       {
         schema: ResumeAnalysisRecordSchema,
         name: ResumeAnalysisRecord.name,
+      },
+      {
+        schema: AiUsageRecordSchema,
+        name: AiUsageRecord.name,
       },
     ]),
   ],
