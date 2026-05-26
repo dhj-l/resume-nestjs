@@ -351,7 +351,7 @@ export class ResumeAiService {
 
       return res;
     } catch (error) {
-      console.log(error);
+      this.logger.error('ai创建简历失败', (error as Error).stack);
       throw new BadRequestException('ai创建简历失败');
     }
   }
@@ -752,7 +752,7 @@ export class ResumeAiService {
     return sseSubject.asObservable().pipe(
       takeUntil(stopSignal),
       catchError((error) => {
-        console.error('SSE连接错误:', error);
+        this.logger.error('SSE连接错误', (error as Error).stack);
         return throwError(() => error);
       }),
     );
@@ -1011,7 +1011,7 @@ export class ResumeAiService {
       const result = await Promise.race([aiCallPromise, timeoutPromise]);
       return result;
     } catch (error: any) {
-      console.error(`AI调用失败: ${error}`);
+      this.logger.error(`AI调用失败: ${error.message}`, error.stack);
       throw new BadRequestException('AI调用失败');
     }
   }

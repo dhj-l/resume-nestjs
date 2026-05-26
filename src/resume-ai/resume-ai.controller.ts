@@ -92,7 +92,7 @@ export class ResumeAiController {
           res.write(sseData);
         },
         error: (error: Error) => {
-          console.error('SSE错误:', error);
+          this.logger.error('SSE错误', error.stack);
           const errorMessage: SseMessage = {
             type: 'error',
             moduleName: 'system',
@@ -117,12 +117,12 @@ export class ResumeAiController {
 
       // 处理连接错误
       req.on('error', (error: Error) => {
-        console.error('连接错误:', error);
+        this.logger.error('连接错误', error.stack);
         subscription.unsubscribe();
         res.end();
       });
     } catch (error: any) {
-      console.error('SSE初始化错误:', error);
+      this.logger.error('SSE初始化错误', error.stack);
       throw new BadRequestException(error.message);
     }
   }
