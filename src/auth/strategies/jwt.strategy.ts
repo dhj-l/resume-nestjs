@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TokenBlacklistService } from '../token-blacklist.service';
+import { extractBearerToken } from '../../common/utils/token';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -19,10 +20,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(req: any, payload: any) {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader?.startsWith('Bearer ')
-      ? authHeader.slice(7)
-      : null;
+    const token = extractBearerToken(req);
 
     if (token) {
       const blacklisted = await this.tokenBlacklistService.isBlacklisted(token);

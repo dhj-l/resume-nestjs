@@ -64,6 +64,7 @@ import {
   AnalysisStatusEnum,
 } from './entities/resume-analysis-record.entity';
 import { analyzeResumePrompt } from './prompt/analyze-resume.prompt';
+import { formatDate } from '../common/utils/date';
 
 @Injectable()
 export class ResumeAiService {
@@ -342,12 +343,10 @@ export class ResumeAiService {
       // const model = this.aiService.generateResumeDeepSeek();
       const parser = new JsonOutputParser();
       const chain = propmt.pipe(model).pipe(parser);
-      const date = new Date();
-      const current = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
       const res = await chain.invoke({
         jd,
         experience: content,
-        current_date: current,
+        current_date: formatDate(),
       });
 
       return res;
@@ -390,8 +389,7 @@ export class ResumeAiService {
       const model = this.aiService.generateImportResume();
       const parser = new JsonOutputParser();
       const chain = prompt.pipe(model).pipe(parser);
-      const date = new Date();
-      const current = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const current = formatDate();
       const res = await chain.invoke({
         resume_text: resumeContent,
         current_date: current,
@@ -875,8 +873,7 @@ export class ResumeAiService {
     retryConfig: RetryConfig,
   ): Promise<ModuleResult[]> {
     const results: ModuleResult[] = [];
-    const currentDate = new Date();
-    const current = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
+    const current = formatDate();
 
     for (let i = 0; i < MODULE_EXECUTION_ORDER.length; i++) {
       const [moduleName, moduleLabel] = MODULE_EXECUTION_ORDER[i];
@@ -1165,7 +1162,6 @@ export class ResumeAiService {
   async polishContent(polishResumeDto: PolishResumeDto, userId: string) {
     const { resumeId, key, index: rawIndex, description } = polishResumeDto;
 
-    // 1. 校验key
     if (!ResumeAiService.ALL_POLISH_KEYS.includes(key)) {
       throw new BadRequestException(`不支持的模块key: ${key}`);
     }
@@ -1181,7 +1177,6 @@ export class ResumeAiService {
     }
     const index = rawIndex!;
 
-    // 2. 查询简历并验证归属
     const selectFields = isArrayModule ? key : `${key}.content`;
     const resume = await this.resumeModel
       .findOne({ _id: resumeId, userId })
@@ -1191,7 +1186,6 @@ export class ResumeAiService {
       throw new BadRequestException('简历不存在');
     }
 
-    // 3. 提取当前内容
     let beforeContent: string;
     if (isArrayModule) {
       const arr = resume[key] as any[];
@@ -1213,23 +1207,15 @@ export class ResumeAiService {
       throw new BadRequestException('该内容为空，无需润色');
     }
 
-    // 4. 调用AI润色
-    const current = new Date();
-    const currentDate = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
-
     const promptTemplate = PromptTemplate.fromTemplate(polishContentPrompt);
     const model = this.aiService.generateResume();
     const parser = new JsonOutputParser();
     const chain = promptTemplate.pipe(model).pipe(parser);
 
     let aiResult: Record<string, string>;
-    let timedOut = false;
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          timedOut = true;
-          reject(new Error('AI润色超时'));
-        }, 60000);
+        setTimeout(() => reject(new Error('AI润色超时')), 60000);
       });
       aiResult = await Promise.race([
         chain.invoke({
@@ -1240,7 +1226,7 @@ export class ResumeAiService {
           ),
           module_key: key,
           description: description || '请对内容进行通用润色优化',
-          current_date: currentDate,
+          current_date: formatDate(),
         }),
         timeoutPromise,
       ]);
@@ -1252,12 +1238,6 @@ export class ResumeAiService {
       throw new BadRequestException('AI润色结果为空，请重试');
     }
 
-    // 5. 将AI结果写回简历（仅在未超时时写入，防止后台 AI 完成后静默修改简历）
-    if (timedOut) {
-      throw new BadRequestException('AI润色失败: AI润色超时');
-    }
-
-    const afterContent = beforeContent; // 先保留，下面合并后更新
     if (isArrayModule) {
       const updateFields: Record<string, any> = {};
       for (const [fieldKey, fieldValue] of Object.entries(aiResult)) {
@@ -1274,7 +1254,6 @@ export class ResumeAiService {
       });
     }
 
-    // 6. 获取修改后的实际内容用于记录
     let finalAfterContent: string;
     if (isArrayModule) {
       const textFields = ResumeAiService.POLISHABLE_FIELDS[key];
@@ -1284,7 +1263,6 @@ export class ResumeAiService {
       finalAfterContent = aiResult[textFields[0]] || aiResult.content || '';
     }
 
-    // 7. 创建修改记录
     const record = await this.editRecordModel.create({
       resumeId,
       editKey: key,
@@ -1307,7 +1285,6 @@ export class ResumeAiService {
   async undoEdit(undoEditDto: UndoEditDto, userId: string) {
     const { recordId, resumeId } = undoEditDto;
 
-    // 1. 查找并验证编辑记录
     const record = await this.editRecordModel.findOne({
       _id: recordId,
       resumeId,
@@ -1317,15 +1294,7 @@ export class ResumeAiService {
       throw new BadRequestException('编辑记录不存在或无权操作');
     }
 
-    // 2. 验证简历存在
-    const resume = await this.resumeModel
-      .findOne({ _id: resumeId, userId })
-      .lean();
-    if (!resume) {
-      throw new BadRequestException('简历不存在');
-    }
-
-    // 3. 恢复原始内容
+    // 恢复原始内容
     const { editKey, editIndex, beforeContent } = record;
     if (editIndex !== null) {
       // 数组模块
@@ -1341,7 +1310,6 @@ export class ResumeAiService {
       });
     }
 
-    // 4. 删除编辑记录
     await this.editRecordModel.findByIdAndDelete(recordId);
 
     return { success: true, restoredContent: beforeContent };
@@ -1353,13 +1321,11 @@ export class ResumeAiService {
   async analyzeResume(analyzeResumeDto: AnalyzeResumeDto, userId: string) {
     const { resumeId, jobDescription } = analyzeResumeDto;
 
-    // 1. 校验 JD
     const { isValid, reason } = this.validateJobDescription(jobDescription);
     if (!isValid) {
       throw new BadRequestException(reason);
     }
 
-    // 2. 检查并发：同一用户同时只能有一个分析任务在进行
     const existingAnalysis = await this.analysisRecordModel.findOne({
       userId,
       status: AnalysisStatusEnum.Analyzing,
@@ -1368,7 +1334,6 @@ export class ResumeAiService {
       throw new BadRequestException('存在正在分析的任务，请稍后重试');
     }
 
-    // 3. 查询简历并验证归属
     const resume = await this.resumeModel
       .findOne({ _id: resumeId, userId })
       .lean();
@@ -1376,7 +1341,6 @@ export class ResumeAiService {
       throw new BadRequestException('简历不存在');
     }
 
-    // 4. 创建分析记录
     const record = await this.analysisRecordModel.create({
       resumeId,
       jobDescription,
@@ -1385,7 +1349,6 @@ export class ResumeAiService {
     });
 
     try {
-      // 5. 提取简历内容（将简历各模块序列化为文本）
       const resumeContent = JSON.stringify(
         {
           basicInfo: resume.basicInfo,
@@ -1403,28 +1366,20 @@ export class ResumeAiService {
         2,
       );
 
-      // 6. 调用AI分析
-      const current = new Date();
-      const currentDate = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
-
       const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
       const model = this.aiService.generateResume();
       const parser = new JsonOutputParser();
       const chain = promptTemplate.pipe(model).pipe(parser);
 
-      let timedOut = false;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          timedOut = true;
-          reject(new Error('AI分析超时'));
-        }, 120000);
+        setTimeout(() => reject(new Error('AI分析超时')), 120000);
       });
 
       const aiResult = await Promise.race([
         chain.invoke({
           jd: jobDescription,
           experience: resumeContent,
-          current_date: currentDate,
+          current_date: formatDate(),
         }),
         timeoutPromise,
       ]);
@@ -1433,13 +1388,10 @@ export class ResumeAiService {
         throw new BadRequestException('AI分析结果为空，请重试');
       }
 
-      // 7. 更新分析记录（仅在未超时时更新，防止后台 AI 完成后覆写 Failed 状态）
-      if (!timedOut) {
-        await this.analysisRecordModel.findByIdAndUpdate(record._id, {
-          status: AnalysisStatusEnum.Completed,
-          analysisResult: aiResult,
-        });
-      }
+      await this.analysisRecordModel.findByIdAndUpdate(record._id, {
+        status: AnalysisStatusEnum.Completed,
+        analysisResult: aiResult,
+      });
 
       return {
         recordId: record._id,

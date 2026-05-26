@@ -344,26 +344,27 @@ export class ResumeService implements OnModuleInit {
       `用户 ${userId} 查询简历列表，页码: ${page}, 每页: ${pageSize}`,
     );
 
-    const res = await this.resumeModel
-      .find({ userId, isTemplate: false })
-      .select([
-        '_id',
-        'userId',
-        'title',
-        'cover',
-        'isTemplate',
-        'createdAt',
-        'updatedAt',
-      ])
-      .skip((page - 1) * pageSize)
-      .limit(pageSize)
-      .sort({ createdAt: -1 })
-      .exec();
-
-    const total = await this.resumeModel.countDocuments({
-      userId,
-      isTemplate: false,
-    });
+    const [res, total] = await Promise.all([
+      this.resumeModel
+        .find({ userId, isTemplate: false })
+        .select([
+          '_id',
+          'userId',
+          'title',
+          'cover',
+          'isTemplate',
+          'createdAt',
+          'updatedAt',
+        ])
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .sort({ createdAt: -1 })
+        .exec(),
+      this.resumeModel.countDocuments({
+        userId,
+        isTemplate: false,
+      }),
+    ]);
 
     this.logger.log(
       `用户 ${userId} 共有 ${total} 份简历，当前页返回 ${res.length} 份`,

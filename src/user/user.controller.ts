@@ -10,6 +10,7 @@ import {
   Req,
   ForbiddenException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -17,6 +18,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { LoginDto } from './dto/login-dto';
 import type { Request } from 'express';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { extractBearerToken } from '../common/utils/token';
 
 // 为请求对象增加用户类型,避免 any 引发的类型风险
 type RequestWithUser = Request & {
@@ -38,10 +40,11 @@ export class UserController {
   }
 
   /**
-   * 用户登录
+   * 用户登录（速率限制：60 秒内最多 5 次，防暴力破解）
    * @param loginDto 登录 DTO
    * @returns 包含 JWT token 和用户信息的对象
    */
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login')
   async login(@Body() loginDto: LoginDto) {
     return this.userService.login(loginDto);
@@ -50,10 +53,7 @@ export class UserController {
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(@Req() req: RequestWithUser) {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader?.startsWith('Bearer ')
-      ? authHeader.slice(7)
-      : '';
+    const token = extractBearerToken(req);
     if (!token) {
       return { message: '退出登录成功' };
     }

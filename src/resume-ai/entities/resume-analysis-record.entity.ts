@@ -32,7 +32,7 @@ export class ResumeAnalysisRecord {
   /**
    * 分析状态
    */
-  @Prop({ default: 'analyzing', enum: AnalysisStatusEnum })
+  @Prop({ default: 'analyzing', enum: AnalysisStatusEnum, index: true })
   status: string;
 
   /**
