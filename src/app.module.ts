@@ -17,6 +17,7 @@ import { AiModule } from './ai/ai.module';
 import { ResumeAiModule } from './resume-ai/resume-ai.module';
 import { GiteeAuthModule } from './gitee-auth/gitee-auth.module';
 import { GitHubAuthModule } from './github-auth/github-auth.module';
+import { QQAuthModule } from './qq-auth/qq-auth.module';
 import { CryptoModule } from './common/crypto.module';
 
 @Module({
@@ -50,6 +51,7 @@ import { CryptoModule } from './common/crypto.module';
     CryptoModule,
     GiteeAuthModule,
     GitHubAuthModule,
+    QQAuthModule,
   ],
   controllers: [AppController],
   providers: [

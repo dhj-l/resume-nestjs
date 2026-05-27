@@ -13,11 +13,12 @@ export class OAuthProvider {
    * 第三方平台类型标识
    * 'gitee' — 码云 Gitee
    * 'github' — GitHub
+   * 'qq' — QQ 互联
    */
   @Prop({
     required: true,
-    enum: ['gitee', 'github'],
-    comment: '第三方平台类型：gitee / github',
+    enum: ['gitee', 'github', 'qq'],
+    comment: '第三方平台类型：gitee / github / qq',
   })
   platform: string;
 
@@ -143,11 +144,12 @@ export class User {
    * 'email'  — 传统邮箱+密码注册
    * 'gitee'  — 通过 Gitee OAuth 注册
    * 'github' — 通过 GitHub OAuth 注册
+   * 'qq'     — 通过 QQ OAuth 注册
    */
   @Prop({
     default: 'email',
-    enum: ['email', 'gitee', 'github'],
-    comment: '账户创建来源：email / gitee / github',
+    enum: ['email', 'gitee', 'github', 'qq'],
+    comment: '账户创建来源：email / gitee / github / qq',
   })
   createdVia: string;
 }
