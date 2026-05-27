@@ -37,6 +37,7 @@ export class GitHubAuthService {
   private static readonly TOKEN_URL =
     'https://github.com/login/oauth/access_token';
   private static readonly USER_API_URL = 'https://api.github.com/user';
+  private static readonly EMAILS_API_URL = 'https://api.github.com/user/emails';
 
   constructor(
     private readonly configService: ConfigService,
@@ -125,15 +126,13 @@ export class GitHubAuthService {
     const tokenResponse = await this.exchangeCodeForToken(code);
     this.logger.log('Access token 获取成功');
 
-    // ③ 获取 GitHub 用户信息
-    const githubUser = await this.fetchGitHubUser(tokenResponse.access_token);
+    // ③ 并行获取 GitHub 用户信息和已验证邮箱
+    const [githubUser, verifiedEmail] = await Promise.all([
+      this.fetchGitHubUser(tokenResponse.access_token),
+      this.fetchGitHubVerifiedEmail(tokenResponse.access_token),
+    ]);
     this.logger.log(
       `获取 GitHub 用户信息成功: ${githubUser.login} (ID: ${githubUser.id})`,
-    );
-
-    // ③.1 获取 GitHub 已验证邮箱（用于安全绑定已有账户）
-    const verifiedEmail = await this.fetchGitHubVerifiedEmail(
-      tokenResponse.access_token,
     );
     if (verifiedEmail) {
       this.logger.log(`获取到 GitHub 已验证邮箱: ${verifiedEmail}`);
@@ -309,7 +308,7 @@ export class GitHubAuthService {
   ): Promise<string | undefined> {
     try {
       const { data } = await axios.get<GitHubEmailEntry[]>(
-        'https://api.github.com/user/emails',
+        GitHubAuthService.EMAILS_API_URL,
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,

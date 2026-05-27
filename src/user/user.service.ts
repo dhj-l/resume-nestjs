@@ -226,30 +226,7 @@ export class UserService {
         throw new BadRequestException('请使用修改密码接口');
       }
 
-      // 唯一性检查 - 邮箱
-      if (updateUserDto.email) {
-        const exists = await this.userModel
-          .findOne({ email: updateUserDto.email })
-          .exec();
-        if (exists && exists._id.toString() !== id) {
-          this.logger.warn(
-            `更新用户失败: 邮箱已被占用 - ${updateUserDto.email}`,
-          );
-          throw new ConflictException('邮箱已被占用');
-        }
-      }
-      // 唯一性检查 - 用户名
-      if (updateUserDto.username) {
-        const exists = await this.userModel
-          .findOne({ username: updateUserDto.username })
-          .exec();
-        if (exists && exists._id.toString() !== id) {
-          this.logger.warn(
-            `更新用户失败: 用户名已被占用 - ${updateUserDto.username}`,
-          );
-          throw new ConflictException('用户名已被占用');
-        }
-      }
+      await this.assertFieldUnique(updateUserDto, id, '更新用户');
 
       const updatedUser = await this.userModel
         .findByIdAndUpdate(id, updateUserDto, { new: true })
@@ -325,30 +302,7 @@ export class UserService {
         throw new BadRequestException('请使用修改密码接口');
       }
 
-      // 唯一性检查 - 邮箱
-      if (updateUserDto.email) {
-        const exists = await this.userModel
-          .findOne({ email: updateUserDto.email })
-          .exec();
-        if (exists && exists._id.toString() !== userId) {
-          this.logger.warn(
-            `更新用户资料失败: 邮箱已被占用 - ${updateUserDto.email}`,
-          );
-          throw new ConflictException('邮箱已被占用');
-        }
-      }
-      // 唯一性检查 - 用户名
-      if (updateUserDto.username) {
-        const exists = await this.userModel
-          .findOne({ username: updateUserDto.username })
-          .exec();
-        if (exists && exists._id.toString() !== userId) {
-          this.logger.warn(
-            `更新用户资料失败: 用户名已被占用 - ${updateUserDto.username}`,
-          );
-          throw new ConflictException('用户名已被占用');
-        }
-      }
+      await this.assertFieldUnique(updateUserDto, userId, '更新用户资料');
 
       const updated = await this.userModel
         .findByIdAndUpdate(userId, updateUserDto, { new: true })
@@ -380,24 +334,33 @@ export class UserService {
     try {
       this.logger.log(`OAuth 用户尝试设置密码: ${userId}`);
 
-      const user = await this.userModel.findById(userId).exec();
-      if (!user) {
-        this.logger.warn(`设置密码失败: 用户不存在 - ${userId}`);
-        throw new NotFoundException('用户不存在');
-      }
+      const hashed = await bcrypt.hash(newPassword, 10);
 
-      // 已有密码的用户应使用 changePassword 接口
-      if (user.password) {
+      // 原子操作：仅当用户存在且尚无密码时才写入
+      const result = await this.userModel
+        .findOneAndUpdate(
+          { _id: userId, password: { $exists: false } },
+          { $set: { password: hashed } },
+          { new: true },
+        )
+        .select('_id')
+        .exec();
+
+      if (!result) {
+        // 区分"用户不存在"和"已有密码"
+        const user = await this.userModel
+          .findById(userId)
+          .select('_id password')
+          .exec();
+        if (!user) {
+          this.logger.warn(`设置密码失败: 用户不存在 - ${userId}`);
+          throw new NotFoundException('用户不存在');
+        }
         this.logger.warn(
           `设置密码失败: 该账户已设置密码，请使用修改密码接口 - ${userId}`,
         );
         throw new BadRequestException('该账户已设置密码，请使用修改密码接口');
       }
-
-      const hashed = await bcrypt.hash(newPassword, 10);
-      await this.userModel
-        .findByIdAndUpdate(userId, { password: hashed })
-        .exec();
 
       this.logger.log(`密码设置成功: ${userId}`);
       return { message: '密码设置成功' };
@@ -531,50 +494,45 @@ export class UserService {
     // ── 策略 2：邮箱匹配 → 绑定到已有账户 ──
     // 仅使用经 OAuth 平台验证过的邮箱进行匹配，防止账户劫持
     // （攻击者可在 GitHub 设置任意邮箱，但无法通过平台验证）
-    const bindingEmail = verifiedEmail || email;
-    if (bindingEmail) {
+    if (verifiedEmail) {
       const existingByEmail = await this.userModel
-        .findOne({ email: bindingEmail })
+        .findOne({ email: verifiedEmail })
         .exec();
 
       if (existingByEmail) {
-        if (!verifiedEmail && email) {
+        this.logger.log(
+          `邮箱匹配已有用户: ${verifiedEmail}，绑定 ${platform} 登录`,
+        );
+
+        // 检查是否已绑定同一平台（理论上不会到这里，因为策略1已覆盖）
+        const alreadyBound = existingByEmail.oauthProviders.some(
+          (p) => p.platform === platform,
+        );
+        if (alreadyBound) {
           this.logger.warn(
-            `OAuth 返回的邮箱 ${email} 未经平台验证，跳过邮箱匹配，创建新用户`,
+            `用户 ${verifiedEmail} 已绑定 ${platform}，跳过重复绑定`,
           );
-        } else {
-          this.logger.log(
-            `邮箱匹配已有用户: ${bindingEmail}，绑定 ${platform} 登录`,
-          );
-
-          // 检查是否已绑定同一平台（理论上不会到这里，因为策略1已覆盖）
-          const alreadyBound = existingByEmail.oauthProviders.some(
-            (p) => p.platform === platform,
-          );
-          if (alreadyBound) {
-            this.logger.warn(
-              `用户 ${bindingEmail} 已绑定 ${platform}，跳过重复绑定`,
-            );
-            return { user: existingByEmail, isNew: false };
-          }
-
-          // 追加密平台绑定
-          existingByEmail.oauthProviders.push({
-            platform,
-            platformUserId,
-            accessToken,
-            refreshToken: refreshToken ?? undefined,
-            tokenExpiresAt: tokenExpiresAt ?? undefined,
-            nickname: nickname ?? undefined,
-            avatarUrl: avatarUrl ?? undefined,
-            profileUrl: profileUrl ?? undefined,
-            email: email ?? undefined,
-          } as any);
-
-          await existingByEmail.save();
           return { user: existingByEmail, isNew: false };
         }
+
+        // 追加密平台绑定
+        existingByEmail.oauthProviders.push({
+          platform,
+          platformUserId,
+          accessToken,
+          refreshToken: refreshToken ?? undefined,
+          tokenExpiresAt: tokenExpiresAt ?? undefined,
+          nickname: nickname ?? undefined,
+          avatarUrl: avatarUrl ?? undefined,
+          profileUrl: profileUrl ?? undefined,
+          email: email ?? undefined,
+        } as any);
+
+        await existingByEmail.save();
+        return { user: existingByEmail, isNew: false };
       }
+    } else if (email) {
+      this.logger.warn(`OAuth 返回的邮箱 ${email} 未经平台验证，跳过邮箱匹配`);
     }
 
     // ── 策略 3：全新用户 → 创建 ──
@@ -638,5 +596,49 @@ export class UserService {
 
     // 极端情况：使用时间戳兜底
     return `${base}_${Date.now().toString(36)}`;
+  }
+
+  /**
+   * 检查邮箱和用户名的唯一性（排除指定用户 ID）
+   * @param fields 包含待检查 email/username 的对象
+   * @param excludeId 排除的用户 ID（当前用户自身）
+   * @param action 日志中的操作描述
+   */
+  private async assertFieldUnique(
+    fields: { email?: string; username?: string },
+    excludeId: string,
+    action: string,
+  ): Promise<void> {
+    const checks: Promise<{ field: string; exists: boolean }>[] = [];
+
+    if (fields.email) {
+      checks.push(
+        this.userModel
+          .findOne({ email: fields.email })
+          .exec()
+          .then((doc) => ({
+            field: '邮箱',
+            exists: !!doc && doc._id.toString() !== excludeId,
+          })),
+      );
+    }
+    if (fields.username) {
+      checks.push(
+        this.userModel
+          .findOne({ username: fields.username })
+          .exec()
+          .then((doc) => ({
+            field: '用户名',
+            exists: !!doc && doc._id.toString() !== excludeId,
+          })),
+      );
+    }
+
+    const results = await Promise.all(checks);
+    for (const { field } of results.filter((r) => r.exists)) {
+      const value = field === '邮箱' ? fields.email : fields.username;
+      this.logger.warn(`${action}失败: ${field}已被占用 - ${value}`);
+      throw new ConflictException(`${field}已被占用`);
+    }
   }
 }

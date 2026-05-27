@@ -18,7 +18,9 @@
       "Bash(pnpm build *)",
       "Bash(pnpm test *)",
       "WebSearch",
-      "Bash(pnpm lint *)"
+      "Bash(pnpm lint *)",
+      "Bash(pnpm format *)",
+      "Bash(python -c ' *)"
     ]
   }
 }

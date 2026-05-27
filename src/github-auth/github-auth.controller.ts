@@ -2,6 +2,7 @@ import { Controller, Get, Query, Req, Res, Logger } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { GitHubAuthService } from './github-auth.service';
 import { OAuthCallbackDto } from '../common/dto/oauth-callback.dto';
+import { redirectOAuthError } from '../common/utils/oauth.util';
 import type { Request, Response } from 'express';
 
 /**
@@ -54,10 +55,10 @@ export class GitHubAuthController {
    *
    * 速率限制：60 秒内最多 10 次（防止回调和暴力尝试）
    *
-   * 错误场景（异常时返回 JSON，不会 302）:
-   *   - state 无效/过期 → 400 "state 参数无效或已过期"
-   *   - code 无效/过期 → 400 "授权码无效或已过期"
-   *   - GitHub API 异常 → 400 "获取 GitHub 用户信息失败"
+   * 错误场景（异常时同样 302 重定向到前端，错误信息通过 URL fragment 传递）:
+   *   - state 无效/过期 → 302 重定向 #error=state 参数无效或已过期
+   *   - code 无效/过期 → 302 重定向 #error=授权码无效或已过期
+   *   - GitHub API 异常 → 302 重定向 #error=获取 GitHub 用户信息失败
    */
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Get('callback')
@@ -85,17 +86,13 @@ export class GitHubAuthController {
       this.logger.log('OAuth 处理完成，302 重定向到前端回调页');
       res.redirect(302, frontendUrl.toString());
     } catch (error: unknown) {
-      // 异常时也重定向到前端，错误信息通过 URL 参数传递
-      const errorMessage =
-        error instanceof Error ? error.message : 'GitHub 登录失败';
-      this.logger.error(`GitHub OAuth 回调处理失败: ${errorMessage}`);
-
-      const frontendUrl = new URL(
+      redirectOAuthError(
+        res,
         this.githubAuthService.getFrontendCallbackUrl(),
+        error,
+        'GitHub',
+        this.logger,
       );
-      frontendUrl.hash = `error=${encodeURIComponent(errorMessage)}`;
-
-      res.redirect(302, frontendUrl.toString());
     }
   }
 }
