@@ -16,6 +16,8 @@ import { TemplateModule } from './template/template.module';
 import { AiModule } from './ai/ai.module';
 import { ResumeAiModule } from './resume-ai/resume-ai.module';
 import { GiteeAuthModule } from './gitee-auth/gitee-auth.module';
+import { GitHubAuthModule } from './github-auth/github-auth.module';
+import { CryptoModule } from './common/crypto.module';
 
 @Module({
   imports: [
@@ -45,7 +47,9 @@ import { GiteeAuthModule } from './gitee-auth/gitee-auth.module';
     TemplateModule,
     AiModule,
     ResumeAiModule,
+    CryptoModule,
     GiteeAuthModule,
+    GitHubAuthModule,
   ],
   controllers: [AppController],
   providers: [

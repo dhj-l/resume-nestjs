@@ -12,28 +12,30 @@ import { generateState, verifyState } from '../common/utils/state.util';
 import { encryptToken, decryptToken } from '../common/utils/crypto.util';
 import { ENCRYPTION_KEY } from '../common/crypto.module';
 import {
-  GiteeTokenResponse,
-  GiteeUserResponse,
-  GiteeOAuthConfig,
-} from './interfaces/gitee-api.interface';
+  GitHubTokenResponse,
+  GitHubUserResponse,
+  GitHubOAuthConfig,
+} from './interfaces/github-api.interface';
 
 /**
- * Gitee OAuth 认证服务
+ * GitHub OAuth 认证服务
  *
  * 实现 OAuth 2.0 授权码流程（Authorization Code Grant）：
  *   1. 生成授权 URL（含防 CSRF 的 state 参数）
  *   2. 处理回调：验证 state → 换取 token → 获取用户信息 → 创建/绑定用户 → 签发 JWT
  */
 @Injectable()
-export class GiteeAuthService {
-  private readonly logger = new Logger(GiteeAuthService.name);
-  private readonly config: GiteeOAuthConfig;
+export class GitHubAuthService {
+  private readonly logger = new Logger(GitHubAuthService.name);
+  private readonly config: GitHubOAuthConfig;
   private readonly encryptionKey: Buffer | null;
 
-  // Gitee OAuth API 端点
-  private static readonly AUTHORIZE_URL = 'https://gitee.com/oauth/authorize';
-  private static readonly TOKEN_URL = 'https://gitee.com/oauth/token';
-  private static readonly USER_API_URL = 'https://gitee.com/api/v5/user';
+  // GitHub OAuth API 端点
+  private static readonly AUTHORIZE_URL =
+    'https://github.com/login/oauth/authorize';
+  private static readonly TOKEN_URL =
+    'https://github.com/login/oauth/access_token';
+  private static readonly USER_API_URL = 'https://api.github.com/user';
 
   constructor(
     private readonly configService: ConfigService,
@@ -42,12 +44,13 @@ export class GiteeAuthService {
     @Inject(ENCRYPTION_KEY) encryptionKey: Buffer | null,
   ) {
     this.config = {
-      clientId: configService.getOrThrow<string>('GITEE_CLIENT_ID'),
-      clientSecret: configService.getOrThrow<string>('GITEE_CLIENT_SECRET'),
-      redirectUri: configService.getOrThrow<string>('GITEE_REDIRECT_URI'),
-      scope: configService.get<string>('GITEE_SCOPE') || 'user_info',
+      clientId: configService.getOrThrow<string>('GITHUB_CLIENT_ID'),
+      clientSecret: configService.getOrThrow<string>('GITHUB_CLIENT_SECRET'),
+      redirectUri: configService.getOrThrow<string>('GITHUB_REDIRECT_URI'),
+      scope:
+        configService.get<string>('GITHUB_SCOPE') || 'read:user user:email',
       frontendCallbackUrl: configService.getOrThrow<string>(
-        'GITEE_FRONTEND_CALLBACK_URL',
+        'GITHUB_FRONTEND_CALLBACK_URL',
       ),
     };
 
@@ -62,9 +65,9 @@ export class GiteeAuthService {
   }
 
   /**
-   * 生成 Gitee OAuth 授权 URL
+   * 生成 GitHub OAuth 授权 URL
    *
-   * 拼接 Gitee 授权页面地址，包含：
+   * 拼接 GitHub 授权页面地址，包含：
    *   - client_id: 应用 ID
    *   - redirect_uri: 回调地址
    *   - scope: 权限范围
@@ -80,30 +83,29 @@ export class GiteeAuthService {
       client_id: this.config.clientId,
       redirect_uri: this.config.redirectUri,
       scope: this.config.scope,
-      response_type: 'code',
       state,
     });
 
-    const authUrl = `${GiteeAuthService.AUTHORIZE_URL}?${params.toString()}`;
+    const authUrl = `${GitHubAuthService.AUTHORIZE_URL}?${params.toString()}`;
 
     this.logger.log(
-      `生成 Gitee 授权 URL，state 前8位: ${state.substring(0, 8)}...`,
+      `生成 GitHub 授权 URL，state 前8位: ${state.substring(0, 8)}...`,
     );
     return { authUrl, state };
   }
 
   /**
-   * 处理 Gitee OAuth 回调
+   * 处理 GitHub OAuth 回调
    *
    * 完整流程：
    *   ① 校验 state 参数（防 CSRF + 时效性检查）
    *   ② 用授权码换取 access_token
-   *   ③ 用 access_token 获取 Gitee 用户信息
+   *   ③ 用 access_token 获取 GitHub 用户信息
    *   ④ 创建或绑定本地用户账户
    *   ⑤ 签发 JWT 令牌
    *
-   * @param code Gitee 回调携带的授权码
-   * @param state Gitee 回调携带的 state 参数
+   * @param code GitHub 回调携带的授权码
+   * @param state GitHub 回调携带的 state 参数
    * @returns { token, user } JWT 令牌和用户信息
    */
   async handleCallback(
@@ -122,32 +124,28 @@ export class GiteeAuthService {
     const tokenResponse = await this.exchangeCodeForToken(code);
     this.logger.log('Access token 获取成功');
 
-    // ③ 获取 Gitee 用户信息
-    const giteeUser = await this.fetchGiteeUser(tokenResponse.access_token);
+    // ③ 获取 GitHub 用户信息
+    const githubUser = await this.fetchGitHubUser(tokenResponse.access_token);
     this.logger.log(
-      `获取 Gitee 用户信息成功: ${giteeUser.login} (ID: ${giteeUser.id})`,
+      `获取 GitHub 用户信息成功: ${githubUser.login} (ID: ${githubUser.id})`,
     );
 
     // ④ 创建或绑定本地用户
-    const tokenExpiresAt = new Date(
-      Date.now() + tokenResponse.expires_in * 1000,
-    );
-
     // 加密存储 access_token（如果配置了加密密钥）
     const storedToken = this.encryptionKey
       ? encryptToken(tokenResponse.access_token, this.encryptionKey)
       : tokenResponse.access_token;
 
     const { user, isNew } = await this.userService.findOrCreateOAuthUser({
-      platform: 'gitee',
-      platformUserId: String(giteeUser.id),
+      platform: 'github',
+      platformUserId: String(githubUser.id),
       accessToken: storedToken,
-      refreshToken: tokenResponse.refresh_token || undefined,
-      tokenExpiresAt,
-      nickname: giteeUser.name || giteeUser.login,
-      avatarUrl: giteeUser.avatar_url,
-      profileUrl: giteeUser.html_url,
-      email: giteeUser.email || undefined,
+      refreshToken: undefined,
+      tokenExpiresAt: undefined,
+      nickname: githubUser.name || githubUser.login,
+      avatarUrl: githubUser.avatar_url,
+      profileUrl: githubUser.html_url,
+      email: githubUser.email || undefined,
     });
 
     this.logger.log(
@@ -191,7 +189,7 @@ export class GiteeAuthService {
   }
 
   /**
-   * 解密存储的 access_token（供内部使用，如调用 Gitee API）
+   * 解密存储的 access_token（供内部使用，如调用 GitHub API）
    */
   decryptStoredToken(encryptedToken: string): string {
     if (!this.encryptionKey) {
@@ -203,15 +201,15 @@ export class GiteeAuthService {
   // ───────────────────── 私有方法 ─────────────────────
 
   /**
-   * POST https://gitee.com/oauth/token
+   * POST https://github.com/login/oauth/access_token
    * 使用授权码换取 access_token
    */
   private async exchangeCodeForToken(
     code: string,
-  ): Promise<GiteeTokenResponse> {
+  ): Promise<GitHubTokenResponse> {
     try {
-      const { data } = await axios.post<GiteeTokenResponse>(
-        GiteeAuthService.TOKEN_URL,
+      const { data } = await axios.post<GitHubTokenResponse>(
+        GitHubAuthService.TOKEN_URL,
         {
           grant_type: 'authorization_code',
           code,
@@ -220,13 +218,16 @@ export class GiteeAuthService {
           redirect_uri: this.config.redirectUri,
         },
         {
-          headers: { Accept: 'application/json' },
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': 'resume-nestjs-app',
+          },
           timeout: 10000,
         },
       );
 
       if (!data.access_token) {
-        throw new BadRequestException('Gitee 返回的令牌为空');
+        throw new BadRequestException('GitHub 返回的令牌为空');
       }
 
       return data;
@@ -243,24 +244,31 @@ export class GiteeAuthService {
   }
 
   /**
-   * GET https://gitee.com/api/v5/user
+   * GET https://api.github.com/user
    * 使用 access_token 获取已授权用户信息
+   *
+   * 注意：GitHub API 使用 Authorization header 传递 token（非 query 参数）
+   * 且必须设置 User-Agent header，否则返回 403
    */
-  private async fetchGiteeUser(
+  private async fetchGitHubUser(
     accessToken: string,
-  ): Promise<GiteeUserResponse> {
+  ): Promise<GitHubUserResponse> {
     try {
-      const { data } = await axios.get<GiteeUserResponse>(
-        GiteeAuthService.USER_API_URL,
+      const { data } = await axios.get<GitHubUserResponse>(
+        GitHubAuthService.USER_API_URL,
         {
-          params: { access_token: accessToken },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'resume-nestjs-app',
+          },
           timeout: 10000,
         },
       );
 
       if (!data || !data.id) {
         throw new BadRequestException(
-          '获取 Gitee 用户信息失败：返回数据不完整',
+          '获取 GitHub 用户信息失败：返回数据不完整',
         );
       }
 
@@ -271,9 +279,9 @@ export class GiteeAuthService {
         message?: string;
       };
       this.logger.error(
-        `获取 Gitee 用户信息失败: ${JSON.stringify(axiosError.response?.data || axiosError.message)}`,
+        `获取 GitHub 用户信息失败: ${JSON.stringify(axiosError.response?.data || axiosError.message)}`,
       );
-      throw new BadRequestException('获取 Gitee 用户信息失败，请重新授权');
+      throw new BadRequestException('获取 GitHub 用户信息失败，请重新授权');
     }
   }
 }

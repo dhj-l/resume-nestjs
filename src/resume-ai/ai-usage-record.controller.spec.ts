@@ -1,5 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import {
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { Types } from 'mongoose';
 import { AiUsageRecordController } from './ai-usage-record.controller';
 import { AiUsageRecordService } from './ai-usage-record.service';
@@ -42,7 +45,10 @@ describe('AiUsageRecordController', () => {
       const result = await controller.findAll({ page: 1, pageSize: 10 });
 
       expect(result).toEqual(mockResult);
-      expect(mockService.findAll).toHaveBeenCalledWith({ page: 1, pageSize: 10 });
+      expect(mockService.findAll).toHaveBeenCalledWith({
+        page: 1,
+        pageSize: 10,
+      });
     });
 
     it('服务层抛 BadRequestException 时应透传', async () => {
@@ -77,7 +83,9 @@ describe('AiUsageRecordController', () => {
       const result = await controller.findOne(record._id.toHexString());
 
       expect(result).toEqual(record);
-      expect(mockService.findById).toHaveBeenCalledWith(record._id.toHexString());
+      expect(mockService.findById).toHaveBeenCalledWith(
+        record._id.toHexString(),
+      );
     });
 
     it('记录不存在时应抛 BadRequestException', async () => {
@@ -103,7 +111,9 @@ describe('AiUsageRecordController', () => {
     it('应删除并返回确认', async () => {
       mockService.remove.mockResolvedValue({ deleted: true });
 
-      const result = await controller.remove(new Types.ObjectId().toHexString());
+      const result = await controller.remove(
+        new Types.ObjectId().toHexString(),
+      );
 
       expect(result).toEqual({ deleted: true });
     });

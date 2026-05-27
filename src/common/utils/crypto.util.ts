@@ -16,7 +16,7 @@ import {
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16; // AES-GCM 推荐 12 字节，这里使用 16 字节以增强安全性
 const KEY_LENGTH = 32; // AES-256 需要 32 字节密钥
-const SALT = 'gitee-oauth-nestjs-resume';
+const SALT = 'gitee-oauth-nestjs-resume'; // 共享盐值，不可更改（否则已有加密令牌无法解密）
 
 /**
  * 从环境变量密钥派生 AES 密钥

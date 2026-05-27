@@ -1,12 +1,12 @@
 import { IsNotEmpty, IsString } from 'class-validator';
 
 /**
- * Gitee OAuth 回调请求参数校验 DTO
+ * OAuth 回调请求参数校验 DTO（Gitee / GitHub 通用）
  *
- * Gitee 授权成功后重定向到 redirect_uri 时携带以下 query 参数：
+ * OAuth 授权成功后重定向到 redirect_uri 时携带以下 query 参数：
  *   ?code=授权码&state=防CSRF参数
  */
-export class GiteeCallbackDto {
+export class OAuthCallbackDto {
   /**
    * 授权码（authorization code）
    * 用于换取 access_token，一次性使用，有效期极短
