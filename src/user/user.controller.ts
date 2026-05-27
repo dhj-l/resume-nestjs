@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { LoginDto } from './dto/login-dto';
 import type { Request } from 'express';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { SetPasswordDto } from './dto/set-password.dto';
 import { extractBearerToken } from '../common/utils/token';
 
 // 为请求对象增加用户类型,避免 any 引发的类型风险
@@ -90,6 +91,17 @@ export class UserController {
   ) {
     const { userId } = req.user;
     return this.userService.changePassword(userId, dto);
+  }
+
+  /**
+   * OAuth 用户设置密码（无需旧密码）
+   * 仅允许此前没有密码的 OAuth 注册用户使用
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('set-password')
+  async setPassword(@Req() req: RequestWithUser, @Body() dto: SetPasswordDto) {
+    const { userId } = req.user;
+    return this.userService.setPassword(userId, dto.newPassword);
   }
 
   /**

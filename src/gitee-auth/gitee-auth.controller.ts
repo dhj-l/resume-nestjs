@@ -68,18 +68,34 @@ export class GiteeAuthController {
   ): Promise<void> {
     this.logger.log('收到 Gitee OAuth 回调');
 
-    // 处理 OAuth 流程：校验 state → 换 token → 获取用户信息 → 签发 JWT
-    const { token } = await this.giteeAuthService.handleCallback(
-      dto.code,
-      dto.state,
-    );
+    try {
+      // 处理 OAuth 流程：校验 state → 换 token → 获取用户信息 → 签发 JWT
+      const { token } = await this.giteeAuthService.handleCallback(
+        dto.code,
+        dto.state,
+      );
 
-    // 构建前端回调 URL，JWT token 通过 URL fragment 传递
-    // fragment 不会被发送到服务器，避免 token 出现在日志中
-    const frontendUrl = new URL(this.giteeAuthService.getFrontendCallbackUrl());
-    frontendUrl.hash = `token=${token}`;
+      // 构建前端回调 URL，JWT token 通过 URL fragment 传递
+      // fragment 不会被发送到服务器，避免 token 出现在日志中
+      const frontendUrl = new URL(
+        this.giteeAuthService.getFrontendCallbackUrl(),
+      );
+      frontendUrl.hash = `token=${token}`;
 
-    this.logger.log('OAuth 处理完成，302 重定向到前端回调页');
-    res.redirect(302, frontendUrl.toString());
+      this.logger.log('OAuth 处理完成，302 重定向到前端回调页');
+      res.redirect(302, frontendUrl.toString());
+    } catch (error: unknown) {
+      // 异常时也重定向到前端，错误信息通过 URL 参数传递
+      const errorMessage =
+        error instanceof Error ? error.message : 'Gitee 登录失败';
+      this.logger.error(`Gitee OAuth 回调处理失败: ${errorMessage}`);
+
+      const frontendUrl = new URL(
+        this.giteeAuthService.getFrontendCallbackUrl(),
+      );
+      frontendUrl.hash = `error=${encodeURIComponent(errorMessage)}`;
+
+      res.redirect(302, frontendUrl.toString());
+    }
   }
 }

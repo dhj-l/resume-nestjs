@@ -55,6 +55,21 @@ export interface GitHubUserResponse {
 }
 
 /**
+ * GET https://api.github.com/user/emails 响应元素
+ * 用于获取用户已验证的邮箱地址
+ */
+export interface GitHubEmailEntry {
+  /** 邮箱地址 */
+  email: string;
+  /** 是否为主邮箱 */
+  primary: boolean;
+  /** 是否已通过平台验证 */
+  verified: boolean;
+  /** 邮箱可见性 */
+  visibility: string | null;
+}
+
+/**
  * GitHub OAuth 模块配置（从 ConfigService 读取）
  */
 export interface GitHubOAuthConfig {

@@ -14,6 +14,7 @@ import { ENCRYPTION_KEY } from '../common/crypto.module';
 import {
   GitHubTokenResponse,
   GitHubUserResponse,
+  GitHubEmailEntry,
   GitHubOAuthConfig,
 } from './interfaces/github-api.interface';
 
@@ -130,6 +131,14 @@ export class GitHubAuthService {
       `获取 GitHub 用户信息成功: ${githubUser.login} (ID: ${githubUser.id})`,
     );
 
+    // ③.1 获取 GitHub 已验证邮箱（用于安全绑定已有账户）
+    const verifiedEmail = await this.fetchGitHubVerifiedEmail(
+      tokenResponse.access_token,
+    );
+    if (verifiedEmail) {
+      this.logger.log(`获取到 GitHub 已验证邮箱: ${verifiedEmail}`);
+    }
+
     // ④ 创建或绑定本地用户
     // 加密存储 access_token（如果配置了加密密钥）
     const storedToken = this.encryptionKey
@@ -146,6 +155,7 @@ export class GitHubAuthService {
       avatarUrl: githubUser.avatar_url,
       profileUrl: githubUser.html_url,
       email: githubUser.email || undefined,
+      verifiedEmail,
     });
 
     this.logger.log(
@@ -282,6 +292,53 @@ export class GitHubAuthService {
         `获取 GitHub 用户信息失败: ${JSON.stringify(axiosError.response?.data || axiosError.message)}`,
       );
       throw new BadRequestException('获取 GitHub 用户信息失败，请重新授权');
+    }
+  }
+
+  /**
+   * GET https://api.github.com/user/emails
+   * 获取 GitHub 已验证的主邮箱地址
+   *
+   * 仅返回经过 GitHub 验证（verified: true）且为主邮箱（primary: true）的地址，
+   * 用于安全地绑定已有账户，防止攻击者通过设置相同未验证邮箱劫持账户。
+   *
+   * 需要 user:email scope。
+   */
+  private async fetchGitHubVerifiedEmail(
+    accessToken: string,
+  ): Promise<string | undefined> {
+    try {
+      const { data } = await axios.get<GitHubEmailEntry[]>(
+        'https://api.github.com/user/emails',
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'resume-nestjs-app',
+          },
+          timeout: 10000,
+        },
+      );
+
+      // 优先返回已验证的主邮箱
+      const primaryVerified = data.find((e) => e.verified && e.primary);
+      if (primaryVerified) {
+        return primaryVerified.email;
+      }
+
+      // 退而求其次，返回任意已验证邮箱
+      const anyVerified = data.find((e) => e.verified);
+      return anyVerified?.email;
+    } catch (error: unknown) {
+      // 获取验证邮箱失败不应阻断 OAuth 流程，降级为不使用邮箱匹配
+      const axiosError = error as {
+        response?: { data?: unknown };
+        message?: string;
+      };
+      this.logger.warn(
+        `获取 GitHub 验证邮箱失败（降级为不使用邮箱匹配）: ${JSON.stringify(axiosError.response?.data || axiosError.message)}`,
+      );
+      return undefined;
     }
   }
 }

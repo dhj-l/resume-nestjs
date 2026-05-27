@@ -136,7 +136,6 @@ export class DocumentParserService {
         '简历内容过短，建议包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息',
       );
       isValidate = false;
-      ``;
     }
     // 检查是否包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息
     const keywords = [

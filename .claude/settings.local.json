@@ -17,7 +17,8 @@
       "Bash(npx eslint *)",
       "Bash(pnpm build *)",
       "Bash(pnpm test *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(pnpm lint *)"
     ]
   }
 }

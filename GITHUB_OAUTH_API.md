@@ -120,17 +120,13 @@ GET /api/v1/auth/github/callback?code={code}&state={state}
 
 例如：`http://localhost:5173/auth/github/callback#token=eyJhbGciOiJIUzI1NiIs...`
 
-**错误响应** `400 Bad Request`
+**错误响应** `302 Found`
 
-```json
-{
-  "code": 400,
-  "message": "state 参数无效或已过期，请重新发起授权",
-  "data": null,
-  "timestamp": "2026-05-27T10:00:00.000Z",
-  "path": "/api/v1/auth/github/callback"
-}
-```
+即使发生错误，也会 302 重定向到前端，错误信息通过 URL fragment 传递：
+
+重定向到 `{GITHUB_FRONTEND_CALLBACK_URL}#error={errorMessage}`
+
+例如：`http://localhost:5173/auth/github/callback#error=state%20%E5%8F%82%E6%95%B0%E6%97%A0%E6%95%88`
 
 | 错误场景 | 错误信息 |
 |----------|----------|
@@ -149,21 +145,28 @@ function GitHubCallbackPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // 从 URL fragment 中提取 token
+    // 从 URL fragment 中提取参数
     const hash = window.location.hash.substring(1); // 去掉 # 号
     const params = new URLSearchParams(hash);
     const token = params.get('token');
+    const error = params.get('error');
+
+    // 清除 URL 中的 fragment（安全考虑）
+    window.history.replaceState(null, '', window.location.pathname);
 
     if (token) {
-      // 存储 token
+      // 登录成功：存储 token
       localStorage.setItem('token', token);
-      // 清除 URL 中的 fragment（安全考虑）
-      window.history.replaceState(null, '', window.location.pathname);
       // 跳转到首页
       navigate('/home');
+    } else if (error) {
+      // 登录失败：显示错误信息
+      console.error('GitHub 登录失败:', decodeURIComponent(error));
+      // 可以显示 toast 或跳转到登录页并显示错误
+      navigate(`/login?error=${encodeURIComponent(error)}`);
     } else {
-      // 处理错误：没有 token
-      console.error('GitHub 登录失败：未收到 token');
+      // 既没有 token 也没有 error
+      console.error('GitHub 登录失败：未收到 token 或错误信息');
       navigate('/login');
     }
   }, [navigate]);

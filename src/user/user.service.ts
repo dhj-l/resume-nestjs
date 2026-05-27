@@ -226,6 +226,31 @@ export class UserService {
         throw new BadRequestException('请使用修改密码接口');
       }
 
+      // 唯一性检查 - 邮箱
+      if (updateUserDto.email) {
+        const exists = await this.userModel
+          .findOne({ email: updateUserDto.email })
+          .exec();
+        if (exists && exists._id.toString() !== id) {
+          this.logger.warn(
+            `更新用户失败: 邮箱已被占用 - ${updateUserDto.email}`,
+          );
+          throw new ConflictException('邮箱已被占用');
+        }
+      }
+      // 唯一性检查 - 用户名
+      if (updateUserDto.username) {
+        const exists = await this.userModel
+          .findOne({ username: updateUserDto.username })
+          .exec();
+        if (exists && exists._id.toString() !== id) {
+          this.logger.warn(
+            `更新用户失败: 用户名已被占用 - ${updateUserDto.username}`,
+          );
+          throw new ConflictException('用户名已被占用');
+        }
+      }
+
       const updatedUser = await this.userModel
         .findByIdAndUpdate(id, updateUserDto, { new: true })
         .select('-password')
@@ -346,6 +371,46 @@ export class UserService {
   }
 
   /**
+   * OAuth 用户设置密码（无需旧密码）
+   * 仅允许此前没有密码的 OAuth 注册用户使用
+   * @param userId 当前登录用户 ID
+   * @param newPassword 新密码
+   */
+  async setPassword(userId: string, newPassword: string) {
+    try {
+      this.logger.log(`OAuth 用户尝试设置密码: ${userId}`);
+
+      const user = await this.userModel.findById(userId).exec();
+      if (!user) {
+        this.logger.warn(`设置密码失败: 用户不存在 - ${userId}`);
+        throw new NotFoundException('用户不存在');
+      }
+
+      // 已有密码的用户应使用 changePassword 接口
+      if (user.password) {
+        this.logger.warn(
+          `设置密码失败: 该账户已设置密码，请使用修改密码接口 - ${userId}`,
+        );
+        throw new BadRequestException('该账户已设置密码，请使用修改密码接口');
+      }
+
+      const hashed = await bcrypt.hash(newPassword, 10);
+      await this.userModel
+        .findByIdAndUpdate(userId, { password: hashed })
+        .exec();
+
+      this.logger.log(`密码设置成功: ${userId}`);
+      return { message: '密码设置成功' };
+    } catch (error) {
+      this.logger.error(
+        `设置密码失败: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * 修改密码（需校验旧密码）
    * @param userId 当前登录用户 ID
    * @param dto 包含旧密码与新密码
@@ -413,6 +478,8 @@ export class UserService {
     avatarUrl?: string;
     profileUrl?: string;
     email?: string;
+    /** 经 OAuth 平台验证过的邮箱（如 GitHub user/emails API 返回的 verified 邮箱） */
+    verifiedEmail?: string;
   }): Promise<{ user: UserDocument; isNew: boolean }> {
     const {
       platform,
@@ -424,6 +491,7 @@ export class UserService {
       avatarUrl,
       profileUrl,
       email,
+      verifiedEmail,
     } = params;
 
     this.logger.log(
@@ -461,36 +529,51 @@ export class UserService {
     }
 
     // ── 策略 2：邮箱匹配 → 绑定到已有账户 ──
-    if (email) {
-      const existingByEmail = await this.userModel.findOne({ email }).exec();
+    // 仅使用经 OAuth 平台验证过的邮箱进行匹配，防止账户劫持
+    // （攻击者可在 GitHub 设置任意邮箱，但无法通过平台验证）
+    const bindingEmail = verifiedEmail || email;
+    if (bindingEmail) {
+      const existingByEmail = await this.userModel
+        .findOne({ email: bindingEmail })
+        .exec();
 
       if (existingByEmail) {
-        this.logger.log(`邮箱匹配已有用户: ${email}，绑定 ${platform} 登录`);
+        if (!verifiedEmail && email) {
+          this.logger.warn(
+            `OAuth 返回的邮箱 ${email} 未经平台验证，跳过邮箱匹配，创建新用户`,
+          );
+        } else {
+          this.logger.log(
+            `邮箱匹配已有用户: ${bindingEmail}，绑定 ${platform} 登录`,
+          );
 
-        // 检查是否已绑定同一平台（理论上不会到这里，因为策略1已覆盖）
-        const alreadyBound = existingByEmail.oauthProviders.some(
-          (p) => p.platform === platform,
-        );
-        if (alreadyBound) {
-          this.logger.warn(`用户 ${email} 已绑定 ${platform}，跳过重复绑定`);
+          // 检查是否已绑定同一平台（理论上不会到这里，因为策略1已覆盖）
+          const alreadyBound = existingByEmail.oauthProviders.some(
+            (p) => p.platform === platform,
+          );
+          if (alreadyBound) {
+            this.logger.warn(
+              `用户 ${bindingEmail} 已绑定 ${platform}，跳过重复绑定`,
+            );
+            return { user: existingByEmail, isNew: false };
+          }
+
+          // 追加密平台绑定
+          existingByEmail.oauthProviders.push({
+            platform,
+            platformUserId,
+            accessToken,
+            refreshToken: refreshToken ?? undefined,
+            tokenExpiresAt: tokenExpiresAt ?? undefined,
+            nickname: nickname ?? undefined,
+            avatarUrl: avatarUrl ?? undefined,
+            profileUrl: profileUrl ?? undefined,
+            email: email ?? undefined,
+          } as any);
+
+          await existingByEmail.save();
           return { user: existingByEmail, isNew: false };
         }
-
-        // 追加密平台绑定
-        existingByEmail.oauthProviders.push({
-          platform,
-          platformUserId,
-          accessToken,
-          refreshToken: refreshToken ?? undefined,
-          tokenExpiresAt: tokenExpiresAt ?? undefined,
-          nickname: nickname ?? undefined,
-          avatarUrl: avatarUrl ?? undefined,
-          profileUrl: profileUrl ?? undefined,
-          email: email ?? undefined,
-        } as any);
-
-        await existingByEmail.save();
-        return { user: existingByEmail, isNew: false };
       }
     }
 
