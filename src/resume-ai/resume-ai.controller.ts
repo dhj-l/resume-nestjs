@@ -5,7 +5,6 @@ import {
   Post,
   Req,
   UseGuards,
-  Headers,
   Res,
   Query,
   Get,
@@ -92,7 +91,7 @@ export class ResumeAiController {
           res.write(sseData);
         },
         error: (error: Error) => {
-          console.error('SSE错误:', error);
+          this.logger.error('SSE错误', error.stack);
           const errorMessage: SseMessage = {
             type: 'error',
             moduleName: 'system',
@@ -117,12 +116,12 @@ export class ResumeAiController {
 
       // 处理连接错误
       req.on('error', (error: Error) => {
-        console.error('连接错误:', error);
+        this.logger.error('连接错误', error.stack);
         subscription.unsubscribe();
         res.end();
       });
     } catch (error: any) {
-      console.error('SSE初始化错误:', error);
+      this.logger.error('SSE初始化错误', error.stack);
       throw new BadRequestException(error.message);
     }
   }
@@ -203,7 +202,8 @@ export class ResumeAiController {
       const { userId } = req.user;
       const parsedPage = page ? parseInt(page, 10) : 1;
       const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
-      const validPage = Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPage =
+        Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
       const validPageSize =
         Number.isNaN(parsedPageSize) || parsedPageSize < 1
           ? 10
@@ -254,6 +254,54 @@ export class ResumeAiController {
         req.user.userId,
       );
     } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取AI使用记录列表（分页）
+   */
+  @Get('usage-records')
+  async getUsageRecords(
+    @Req() req: { user: { userId: string } },
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('aiFunction') aiFunction?: string,
+  ) {
+    try {
+      const { userId } = req.user;
+      const parsedPage = page ? parseInt(page, 10) : 1;
+      const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
+      const validPage =
+        Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPageSize =
+        Number.isNaN(parsedPageSize) || parsedPageSize < 1
+          ? 10
+          : Math.min(parsedPageSize, 100);
+      return await this.resumeAiService.getUsageRecords(
+        userId,
+        validPage,
+        validPageSize,
+        aiFunction,
+      );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取AI使用统计
+   */
+  @Get('usage-stats')
+  async getUsageStats(@Req() req: { user: { userId: string } }) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.getUsageStats(userId);
+    } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(error.message, error.stack);
       throw new InternalServerErrorException('服务器内部错误');

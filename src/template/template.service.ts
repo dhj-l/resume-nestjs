@@ -48,18 +48,16 @@ export class TemplateService {
       }
 
       // 更新简历状态为模板
-      await this.resumeModel.findByIdAndUpdate(
-        createTemplateDto.resumeId,
-        { isTemplate: true },
-      );
+      await this.resumeModel.findByIdAndUpdate(createTemplateDto.resumeId, {
+        isTemplate: true,
+      });
 
       // 创建模板记录
-      const template = await this.templateModel
-        .create({
-          ...createTemplateDto,
-          resume: new Types.ObjectId(createTemplateDto.resumeId),
-          userId,
-        });
+      const template = await this.templateModel.create({
+        ...createTemplateDto,
+        resume: new Types.ObjectId(createTemplateDto.resumeId),
+        userId,
+      });
 
       this.logger.log(`模板创建成功: ${template._id.toString()}`);
       return template;
@@ -201,18 +199,16 @@ export class TemplateService {
       this.logger.log(`用户 ${userId} 尝试删除模板: ${id}`);
 
       // 查询模板并验证权限
-      const template = await this.templateModel
-        .findOne({ _id: id, userId });
+      const template = await this.templateModel.findOne({ _id: id, userId });
 
       if (!template) {
         throw new NotFoundException('模板不存在或无权删除');
       }
 
       // 恢复简历状态
-      await this.resumeModel.findByIdAndUpdate(
-        template.resumeId,
-        { isTemplate: false },
-      );
+      await this.resumeModel.findByIdAndUpdate(template.resumeId, {
+        isTemplate: false,
+      });
 
       // 删除模板
       const deletedTemplate = await this.templateModel

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ResumeAiService } from './resume-ai.service';
 import { ResumeAiController } from './resume-ai.controller';
+import { AiUsageRecordService } from './ai-usage-record.service';
+import { AiUsageRecordController } from './ai-usage-record.controller';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ResumeAi, ResumeAiSchema } from './entities/resume-ai.entity';
 import { AiModule } from 'src/ai/ai.module';
@@ -14,6 +16,10 @@ import {
   ResumeAnalysisRecord,
   ResumeAnalysisRecordSchema,
 } from './entities/resume-analysis-record.entity';
+import {
+  AiUsageRecord,
+  AiUsageRecordSchema,
+} from './entities/ai-usage-record.entity';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -30,11 +36,15 @@ import {
         schema: ResumeAnalysisRecordSchema,
         name: ResumeAnalysisRecord.name,
       },
+      {
+        schema: AiUsageRecordSchema,
+        name: AiUsageRecord.name,
+      },
     ]),
     AiModule,
   ],
-  controllers: [ResumeAiController],
-  providers: [ResumeAiService, DocumentParserService],
+  controllers: [ResumeAiController, AiUsageRecordController],
+  providers: [ResumeAiService, DocumentParserService, AiUsageRecordService],
   exports: [
     DocumentParserService,
     MongooseModule.forFeature([
@@ -46,6 +56,10 @@ import {
       {
         schema: ResumeAnalysisRecordSchema,
         name: ResumeAnalysisRecord.name,
+      },
+      {
+        schema: AiUsageRecordSchema,
+        name: AiUsageRecord.name,
       },
     ]),
   ],

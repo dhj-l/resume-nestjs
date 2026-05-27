@@ -1,8 +1,12 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DeepSeekProps } from './type';
 import { ChatDeepSeek } from '@langchain/deepseek';
+
 @Injectable()
 export class AiService {
+  constructor(private readonly config: ConfigService) {}
+
   createDefaultDeepSeek(props: DeepSeekProps) {
     const {
       model = 'deepseek-chat',
@@ -18,35 +22,33 @@ export class AiService {
     });
     return chat;
   }
+
   /**
    * 简历生成AI模型
    */
   generateResume() {
-    const chat = this.createDefaultDeepSeek({
-      // TODO：先写死，后续从配置文件读取
-      apiKey: 'sk-78a213f613004e8c98f6d6b2ad50ae75',
-    });
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({ apiKey });
     return chat;
   }
+
   /**
    * 解析简历AI模型
    */
   generateImportResume() {
-    const chat = this.createDefaultDeepSeek({
-      // TODO：先写死，后续从配置文件读取
-      apiKey: 'sk-78a213f613004e8c98f6d6b2ad50ae75',
-      temperature: 0.1,
-    });
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({ apiKey, temperature: 0.1 });
     return chat;
   }
+
   /**
    * 简历生成AI模型(深度思考版)
    */
   generateResumeDeepSeek() {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
     const chat = this.createDefaultDeepSeek({
       model: 'deepseek-reasoner',
-      // TODO：先写死，后续从配置文件读取
-      apiKey: 'sk-897b778ecf344a54bb15a4ed4c49db36',
+      apiKey,
     });
     return chat;
   }

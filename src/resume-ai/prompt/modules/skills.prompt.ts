@@ -62,4 +62,4 @@ ${commonEnhancementStrategy}
 6. 若检测到非列表长字符串，立即重新生成
 
 返回纯 JSON。
-`
+`;
