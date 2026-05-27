@@ -1,217 +1,49 @@
-import {
-  Injectable,
-  Inject,
-  Logger,
-  BadRequestException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
+import { BadRequestException } from '@nestjs/common';
 import axios from 'axios';
-import { UserService } from '../user/user.service';
-import { generateState, verifyState } from '../common/utils/state.util';
-import { encryptToken, decryptToken } from '../common/utils/crypto.util';
-import { ENCRYPTION_KEY } from '../common/crypto.module';
+import { BaseOAuthService } from '../common/oauth/base-oauth.service';
+import type {
+  OAuthTokenData,
+  FindOrCreateOAuthUserParams,
+} from '../common/oauth/oauth.types';
 import {
   GiteeTokenResponse,
   GiteeUserResponse,
-  GiteeOAuthConfig,
 } from './interfaces/gitee-api.interface';
 
 /**
  * Gitee OAuth 认证服务
  *
- * 实现 OAuth 2.0 授权码流程（Authorization Code Grant）：
- *   1. 生成授权 URL（含防 CSRF 的 state 参数）
- *   2. 处理回调：验证 state → 换取 token → 获取用户信息 → 创建/绑定用户 → 签发 JWT
+ * 继承 BaseOAuthService，仅实现 Gitee 平台差异化的逻辑。
  */
-@Injectable()
-export class GiteeAuthService {
-  private readonly logger = new Logger(GiteeAuthService.name);
-  private readonly config: GiteeOAuthConfig;
-  private readonly encryptionKey: Buffer | null;
+export class GiteeAuthService extends BaseOAuthService {
+  readonly platformName = 'gitee';
 
-  // Gitee OAuth API 端点
-  private static readonly AUTHORIZE_URL = 'https://gitee.com/oauth/authorize';
-  private static readonly TOKEN_URL = 'https://gitee.com/oauth/token';
-  private static readonly USER_API_URL = 'https://gitee.com/api/v5/user';
+  // ───────────────────── 抽象方法实现 ─────────────────────
 
-  constructor(
-    private readonly configService: ConfigService,
-    private readonly userService: UserService,
-    private readonly jwtService: JwtService,
-    @Inject(ENCRYPTION_KEY) encryptionKey: Buffer | null,
-  ) {
-    this.config = {
-      clientId: configService.getOrThrow<string>('GITEE_CLIENT_ID'),
-      clientSecret: configService.getOrThrow<string>('GITEE_CLIENT_SECRET'),
-      redirectUri: configService.getOrThrow<string>('GITEE_REDIRECT_URI'),
-      scope: configService.get<string>('GITEE_SCOPE') || 'user_info',
-      frontendCallbackUrl: configService.getOrThrow<string>(
-        'GITEE_FRONTEND_CALLBACK_URL',
-      ),
-    };
-
-    this.encryptionKey = encryptionKey;
-    if (encryptionKey) {
-      this.logger.log('令牌加密已启用 (AES-256-GCM)');
-    } else {
-      this.logger.warn(
-        '⚠️  未配置 ENCRYPTION_KEY，OAuth 令牌将以明文存储（仅开发环境可接受）',
-      );
-    }
+  getConfigPrefix(): string {
+    return 'GITEE';
   }
 
-  /**
-   * 生成 Gitee OAuth 授权 URL
-   *
-   * 拼接 Gitee 授权页面地址，包含：
-   *   - client_id: 应用 ID
-   *   - redirect_uri: 回调地址
-   *   - scope: 权限范围
-   *   - state: 防 CSRF 签名参数（5分钟有效）
-   *
-   * @returns 包含 authUrl 和 state 的对象（state 仅用于调试，前端无需处理）
-   */
-  getAuthUrl(): { authUrl: string; state: string } {
-    const secret = this.configService.getOrThrow<string>('JWT_SECRET');
-    const state = generateState(secret);
-
-    const params = new URLSearchParams({
-      client_id: this.config.clientId,
-      redirect_uri: this.config.redirectUri,
-      scope: this.config.scope,
-      response_type: 'code',
-      state,
-    });
-
-    const authUrl = `${GiteeAuthService.AUTHORIZE_URL}?${params.toString()}`;
-
-    this.logger.log(
-      `生成 Gitee 授权 URL，state 前8位: ${state.substring(0, 8)}...`,
-    );
-    return { authUrl, state };
+  protected getDefaultScope(): string {
+    return 'user_info';
   }
 
-  /**
-   * 处理 Gitee OAuth 回调
-   *
-   * 完整流程：
-   *   ① 校验 state 参数（防 CSRF + 时效性检查）
-   *   ② 用授权码换取 access_token
-   *   ③ 用 access_token 获取 Gitee 用户信息
-   *   ④ 创建或绑定本地用户账户
-   *   ⑤ 签发 JWT 令牌
-   *
-   * @param code Gitee 回调携带的授权码
-   * @param state Gitee 回调携带的 state 参数
-   * @returns { token, user } JWT 令牌和用户信息
-   */
-  async handleCallback(
-    code: string,
-    state: string,
-  ): Promise<{ token: string; user: Record<string, unknown> }> {
-    // ① State 校验（防 CSRF）
-    const secret = this.configService.getOrThrow<string>('JWT_SECRET');
-    if (!verifyState(state, secret)) {
-      this.logger.warn('OAuth 回调 state 校验失败（可能已过期或伪造请求）');
-      throw new BadRequestException('state 参数无效或已过期，请重新发起授权');
-    }
-    this.logger.log('State 校验通过');
-
-    // ② 用授权码换取 access_token
-    const tokenResponse = await this.exchangeCodeForToken(code);
-    this.logger.log('Access token 获取成功');
-
-    // ③ 获取 Gitee 用户信息
-    const giteeUser = await this.fetchGiteeUser(tokenResponse.access_token);
-    this.logger.log(
-      `获取 Gitee 用户信息成功: ${giteeUser.login} (ID: ${giteeUser.id})`,
-    );
-
-    // ④ 创建或绑定本地用户
-    const tokenExpiresAt = new Date(
-      Date.now() + tokenResponse.expires_in * 1000,
-    );
-
-    // 加密存储 access_token（如果配置了加密密钥）
-    const storedToken = this.encryptionKey
-      ? encryptToken(tokenResponse.access_token, this.encryptionKey)
-      : tokenResponse.access_token;
-
-    const { user, isNew } = await this.userService.findOrCreateOAuthUser({
-      platform: 'gitee',
-      platformUserId: String(giteeUser.id),
-      accessToken: storedToken,
-      refreshToken: tokenResponse.refresh_token || undefined,
-      tokenExpiresAt,
-      nickname: giteeUser.name || giteeUser.login,
-      avatarUrl: giteeUser.avatar_url,
-      profileUrl: giteeUser.html_url,
-      email: giteeUser.email || undefined,
-    });
-
-    this.logger.log(
-      `${isNew ? '创建新用户' : '绑定已有用户'}: ${user.email || user.username}`,
-    );
-
-    // ⑤ 签发 JWT
-    const token = this.jwtService.sign({
-      userId: user._id,
-      username: user.username,
-      email: user.email,
-    });
-
-    // 构造返回的用户对象（剔除敏感字段）
-    const userObject = (user as any).toObject ? (user as any).toObject() : user;
-    // 从返回对象中移除敏感信息
-    if (userObject.oauthProviders) {
-      userObject.oauthProviders = userObject.oauthProviders.map(
-        (p: Record<string, unknown>) => ({
-          platform: p.platform,
-          platformUserId: p.platformUserId,
-          nickname: p.nickname,
-          avatarUrl: p.avatarUrl,
-          profileUrl: p.profileUrl,
-          // 不返回 accessToken / refreshToken / tokenExpiresAt
-        }),
-      );
-    }
-    Reflect.deleteProperty(userObject, 'password');
-
-    return { token, user: userObject };
+  getAuthorizeUrl(): string {
+    return 'https://gitee.com/oauth/authorize';
   }
 
-  /**
-   * 获取前端 OAuth 回调页地址
-   *
-   * 后端处理完 OAuth 后 302 重定向到此地址，token 通过 URL fragment 传递。
-   */
-  getFrontendCallbackUrl(): string {
-    return this.config.frontendCallbackUrl;
+  getAuthUrlParams(state: string): Record<string, string> {
+    return { response_type: 'code', state };
   }
-
-  /**
-   * 解密存储的 access_token（供内部使用，如调用 Gitee API）
-   */
-  decryptStoredToken(encryptedToken: string): string {
-    if (!this.encryptionKey) {
-      return encryptedToken; // 未加密存储，直接返回
-    }
-    return decryptToken(encryptedToken, this.encryptionKey);
-  }
-
-  // ───────────────────── 私有方法 ─────────────────────
 
   /**
    * POST https://gitee.com/oauth/token
    * 使用授权码换取 access_token
    */
-  private async exchangeCodeForToken(
-    code: string,
-  ): Promise<GiteeTokenResponse> {
+  async exchangeCodeForToken(code: string): Promise<OAuthTokenData> {
     try {
       const { data } = await axios.post<GiteeTokenResponse>(
-        GiteeAuthService.TOKEN_URL,
+        'https://gitee.com/oauth/token',
         {
           grant_type: 'authorization_code',
           code,
@@ -246,12 +78,13 @@ export class GiteeAuthService {
    * GET https://gitee.com/api/v5/user
    * 使用 access_token 获取已授权用户信息
    */
-  private async fetchGiteeUser(
+  async fetchUserInfo(
     accessToken: string,
-  ): Promise<GiteeUserResponse> {
+    _context: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     try {
       const { data } = await axios.get<GiteeUserResponse>(
-        GiteeAuthService.USER_API_URL,
+        'https://gitee.com/api/v5/user',
         {
           params: { access_token: accessToken },
           timeout: 10000,
@@ -264,7 +97,7 @@ export class GiteeAuthService {
         );
       }
 
-      return data;
+      return data as unknown as Record<string, unknown>;
     } catch (error: unknown) {
       const axiosError = error as {
         response?: { data?: unknown };
@@ -275,5 +108,27 @@ export class GiteeAuthService {
       );
       throw new BadRequestException('获取 Gitee 用户信息失败，请重新授权');
     }
+  }
+
+  buildFindOrCreateParams(
+    accessToken: string,
+    tokenData: OAuthTokenData,
+    userInfo: Record<string, unknown>,
+    _context: Record<string, unknown>,
+  ): FindOrCreateOAuthUserParams {
+    const giteeUser = userInfo as unknown as GiteeUserResponse;
+    return {
+      platform: this.platformName,
+      platformUserId: String(giteeUser.id),
+      accessToken,
+      refreshToken: tokenData.refresh_token || undefined,
+      tokenExpiresAt: tokenData.expires_in
+        ? new Date(Date.now() + tokenData.expires_in * 1000)
+        : undefined,
+      nickname: giteeUser.name || giteeUser.login,
+      avatarUrl: giteeUser.avatar_url,
+      profileUrl: giteeUser.html_url,
+      email: giteeUser.email || undefined,
+    };
   }
 }

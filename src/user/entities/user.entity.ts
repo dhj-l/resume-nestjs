@@ -1,6 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
+/** OAuth 支持的第三方平台列表 */
+export const OAUTH_PLATFORMS = ['gitee', 'github', 'qq'] as const;
+/** OAuth 平台联合类型 */
+export type OAuthPlatform = (typeof OAUTH_PLATFORMS)[number];
+
 export type UserDocument = User & Document;
 
 /**
