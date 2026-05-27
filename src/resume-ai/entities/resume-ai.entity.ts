@@ -87,7 +87,7 @@ export class ResumeAi {
   /**
    * 状态（创建中，已完成，失败）
    */
-  @Prop({ default: 'creating', enum: ResumeAiStatusEnum })
+  @Prop({ default: 'creating', enum: ResumeAiStatusEnum, index: true })
   status: string;
   /**
    * 简历模板类型

@@ -32,7 +32,7 @@ export class ResumeAnalysisRecord {
   /**
    * 分析状态
    */
-  @Prop({ default: 'analyzing', enum: AnalysisStatusEnum })
+  @Prop({ default: 'analyzing', enum: AnalysisStatusEnum, index: true })
   status: string;
 
   /**
@@ -44,7 +44,12 @@ export class ResumeAnalysisRecord {
   /**
    * 用户ID
    */
-  @Prop({ type: SchemaTypes.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({
+    type: SchemaTypes.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true,
+  })
   userId: Types.ObjectId;
 }
 

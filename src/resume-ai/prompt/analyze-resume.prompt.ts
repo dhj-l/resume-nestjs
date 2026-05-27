@@ -24,7 +24,7 @@ export const analyzeResumePrompt = `你是一位资深的HR顾问和简历分析
     {{ "name": "专业技能", "score": 0, "max": 100, "weight": 0.25 }},
     {{ "name": "教育背景", "score": 0, "max": 100, "weight": 0.15 }},
     {{ "name": "项目成果", "score": 0, "max": 100, "weight": 0.2 }},
-    {{ "name": "排版与格式", "score": 0, "max": 100, "weight": 0.1 }}
+    {{ "name": "语言表达与规范", "score": 0, "max": 100, "weight": 0.1 }}
   ],
   "strengths": [
     {{

@@ -14,6 +14,9 @@ import {
   Template,
   TemplateDocument,
 } from '../template/entities/template.entity';
+import { ResumeAi } from '../resume-ai/entities/resume-ai.entity';
+import { ResumeEditRecord } from '../resume-ai/entities/resume-edit-record.entity';
+import { ResumeAnalysisRecord } from '../resume-ai/entities/resume-analysis-record.entity';
 import { Model, Types } from 'mongoose';
 import puppeteer from 'puppeteer';
 import { readFileSync } from 'fs';
@@ -33,6 +36,11 @@ export class ResumeService implements OnModuleInit {
   constructor(
     @InjectModel(Resume.name) private resumeModel: Model<ResumeDocument>,
     @InjectModel(Template.name) private templateModel: Model<TemplateDocument>,
+    @InjectModel(ResumeAi.name) private resumeAiModel: Model<ResumeAi>,
+    @InjectModel(ResumeEditRecord.name)
+    private editRecordModel: Model<ResumeEditRecord>,
+    @InjectModel(ResumeAnalysisRecord.name)
+    private analysisRecordModel: Model<ResumeAnalysisRecord>,
   ) {}
 
   onModuleInit() {
@@ -102,6 +110,23 @@ export class ResumeService implements OnModuleInit {
     return result;
   }
 
+  /**
+   * 清洗从数据库查出的简历数据，兼容旧格式
+   * 将 skills/certificates/selfEvaluation 从字符串转换为嵌入式对象
+   */
+  private sanitizeResumeData(data: any) {
+    const result = { ...data };
+    const embedFields = ['skills', 'certificates', 'selfEvaluation'] as const;
+
+    for (const field of embedFields) {
+      if (typeof result[field] === 'string') {
+        result[field] = { content: result[field], globalSort: 0 };
+      }
+    }
+
+    return result;
+  }
+
   private getContent(html: string, css: string) {
     return `
         <!DOCTYPE html>
@@ -123,6 +148,48 @@ export class ResumeService implements OnModuleInit {
           </body>
         </html>
       `;
+  }
+
+  /**
+   * 后处理 Puppeteer 页面 DOM，消除固定高度分页导致的空白
+   */
+  private async preparePageForPdf(page: any): Promise<void> {
+    await page.addStyleTag({
+      content: `
+        * {
+          break-inside: auto !important;
+          page-break-inside: auto !important;
+          -webkit-column-break-inside: auto !important;
+        }
+      `,
+    });
+
+    await page.evaluate(() => {
+      const allElements = document.querySelectorAll('*');
+      const a4HeightPx = 1123; // 297mm ≈ 1123px at 96dpi
+
+      for (const el of allElements) {
+        const style = window.getComputedStyle(el);
+        if (style.height && style.height !== 'auto' && style.height !== '0px') {
+          const heightPx = parseFloat(style.height);
+          if (heightPx >= a4HeightPx * 0.9) {
+            (el as HTMLElement).style.height = 'auto';
+            (el as HTMLElement).style.minHeight = 'auto';
+            (el as HTMLElement).style.overflow = 'visible';
+          }
+        }
+      }
+
+      document.body.style.overflow = 'visible';
+      for (const child of document.body.children) {
+        const htmlChild = child as HTMLElement;
+        const style = window.getComputedStyle(htmlChild);
+        if (style.overflow === 'hidden' || style.overflowX === 'hidden') {
+          htmlChild.style.overflow = 'visible';
+          htmlChild.style.overflowX = 'visible';
+        }
+      }
+    });
   }
 
   /**
@@ -151,6 +218,9 @@ export class ResumeService implements OnModuleInit {
       await page.waitForFunction(() => {
         return document.readyState === 'complete';
       });
+
+      // 后处理 DOM，消除固定高度分页导致的空白
+      await this.preparePageForPdf(page);
 
       // 生成 PDF
       const pdfBuffer = await page.pdf({
@@ -211,11 +281,14 @@ export class ResumeService implements OnModuleInit {
         throw new NotFoundException('模板关联的简历原始数据已丢失');
       }
 
+      // 清洗旧格式数据，兼容 schema 变更前创建的模板
+      const sanitizedData = this.sanitizeResumeData(resumeData);
+
       // 创建新简历
       const newResume = await this.resumeModel.create({
-        ...resumeData,
-        type: resumeData.type || 'default',
-        title: title || `${resumeData.title} (副本)`,
+        ...sanitizedData,
+        type: sanitizedData.type || 'default',
+        title: title || `${sanitizedData.title} (副本)`,
         userId,
         user: new Types.ObjectId(userId),
         isTemplate: false,
@@ -271,26 +344,27 @@ export class ResumeService implements OnModuleInit {
       `用户 ${userId} 查询简历列表，页码: ${page}, 每页: ${pageSize}`,
     );
 
-    const res = await this.resumeModel
-      .find({ userId, isTemplate: false })
-      .select([
-        '_id',
-        'userId',
-        'title',
-        'cover',
-        'isTemplate',
-        'createdAt',
-        'updatedAt',
-      ])
-      .skip((page - 1) * pageSize)
-      .limit(pageSize)
-      .sort({ createdAt: -1 })
-      .exec();
-
-    const total = await this.resumeModel.countDocuments({
-      userId,
-      isTemplate: false,
-    });
+    const [res, total] = await Promise.all([
+      this.resumeModel
+        .find({ userId, isTemplate: false })
+        .select([
+          '_id',
+          'userId',
+          'title',
+          'cover',
+          'isTemplate',
+          'createdAt',
+          'updatedAt',
+        ])
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .sort({ createdAt: -1 })
+        .exec(),
+      this.resumeModel.countDocuments({
+        userId,
+        isTemplate: false,
+      }),
+    ]);
 
     this.logger.log(
       `用户 ${userId} 共有 ${total} 份简历，当前页返回 ${res.length} 份`,
@@ -398,6 +472,27 @@ export class ResumeService implements OnModuleInit {
     }
 
     this.logger.log(`用户 ${userId} 成功删除简历 ${id}`);
+
+    // 级联删除关联的 AI 生成记录、编辑记录、分析记录（尽力而为，不阻塞主删除结果）
+    try {
+      const [aiResult, editResult, analysisResult] = await Promise.all([
+        this.resumeAiModel.deleteMany({
+          $or: [{ generatedResumeId: id }, { resumeId: id }],
+        }),
+        this.editRecordModel.deleteMany({ resumeId: id }),
+        this.analysisRecordModel.deleteMany({ resumeId: id }),
+      ]);
+      this.logger.log(
+        `级联删除完成: AI记录${aiResult.deletedCount}条, ` +
+          `编辑记录${editResult.deletedCount}条, ` +
+          `分析记录${analysisResult.deletedCount}条`,
+      );
+    } catch (cascadeError) {
+      this.logger.error(
+        `级联删除关联记录失败（简历 ${id} 已删除）: ${(cascadeError as Error).message}`,
+      );
+    }
+
     return resume;
   }
 

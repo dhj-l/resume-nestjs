@@ -14,6 +14,7 @@ import { User, UserDocument } from './entities/user.entity';
 import { LoginDto } from './dto/login-dto';
 import { JwtService } from '@nestjs/jwt';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { TokenBlacklistService } from '../auth/token-blacklist.service';
 
 @Injectable()
 export class UserService {
@@ -22,6 +23,7 @@ export class UserService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private jwtService: JwtService,
+    private tokenBlacklistService: TokenBlacklistService,
   ) {}
 
   /**
@@ -96,6 +98,14 @@ export class UserService {
         );
       }
 
+      // OAuth 注册用户未设置密码，无法通过邮箱+密码方式登录
+      if (!user.password) {
+        this.logger.warn(`登录失败: 该账户未设置密码（OAuth注册） - ${email}`);
+        throw new BadRequestException(
+          '该账户通过第三方平台注册，请使用第三方登录',
+        );
+      }
+
       const passwordMatch = await bcrypt.compare(password, user.password);
       if (!passwordMatch) {
         // 增加登录失败次数
@@ -145,6 +155,21 @@ export class UserService {
     } catch (error) {
       this.logger.error(
         `登录失败: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
+  }
+
+  async logout(token: string) {
+    try {
+      this.logger.log('用户请求退出登录');
+      await this.tokenBlacklistService.addToBlacklist(token);
+      this.logger.log('用户退出登录成功');
+      return { message: '退出登录成功' };
+    } catch (error) {
+      this.logger.error(
+        `退出登录失败: ${(error as Error).message}`,
         (error as Error).stack,
       );
       throw error;
@@ -335,6 +360,16 @@ export class UserService {
         throw new NotFoundException('用户不存在');
       }
 
+      // OAuth 注册用户未设置密码，无法通过旧密码校验方式修改密码
+      if (!user.password) {
+        this.logger.warn(
+          `修改密码失败: 该账户未设置密码（OAuth注册） - ${userId}`,
+        );
+        throw new BadRequestException(
+          '该账户通过第三方平台注册，未设置密码，无法修改',
+        );
+      }
+
       const match = await bcrypt.compare(dto.oldPassword, user.password);
       if (!match) {
         this.logger.warn(`修改密码失败: 旧密码不正确 - ${userId}`);
@@ -355,5 +390,170 @@ export class UserService {
       );
       throw error;
     }
+  }
+
+  /**
+   * OAuth 第三方登录 — 查找或创建用户
+   *
+   * 三种匹配策略（按优先级）：
+   *   1. 同平台 + 同 platformUserId → 更新令牌（用户重新授权）
+   *   2. 邮箱匹配已有用户 → 将新平台绑定到已有账户（账户关联）
+   *   3. 全新用户 → 创建用户（password 为空，createdVia 标记为平台名）
+   *
+   * @param params OAuth 用户信息
+   * @returns 用户文档和是否为新创建的标志
+   */
+  async findOrCreateOAuthUser(params: {
+    platform: string;
+    platformUserId: string;
+    accessToken: string;
+    refreshToken?: string;
+    tokenExpiresAt?: Date;
+    nickname?: string;
+    avatarUrl?: string;
+    profileUrl?: string;
+    email?: string;
+  }): Promise<{ user: UserDocument; isNew: boolean }> {
+    const {
+      platform,
+      platformUserId,
+      accessToken,
+      refreshToken,
+      tokenExpiresAt,
+      nickname,
+      avatarUrl,
+      profileUrl,
+      email,
+    } = params;
+
+    this.logger.log(
+      `OAuth 查找/创建用户: platform=${platform}, platformUserId=${platformUserId}`,
+    );
+
+    // ── 策略 1：同平台同 ID 已存在 → 更新令牌 ──
+    const existingByPlatform = await this.userModel
+      .findOne({
+        'oauthProviders.platform': platform,
+        'oauthProviders.platformUserId': platformUserId,
+      })
+      .exec();
+
+    if (existingByPlatform) {
+      this.logger.log(`已有 OAuth 绑定用户: ${existingByPlatform.email}`);
+
+      // 更新对应平台的令牌信息
+      const provider = existingByPlatform.oauthProviders.find(
+        (p) => p.platform === platform && p.platformUserId === platformUserId,
+      );
+      if (provider) {
+        provider.accessToken = accessToken;
+        provider.refreshToken = refreshToken ?? undefined;
+        provider.tokenExpiresAt = tokenExpiresAt ?? undefined;
+        // 更新可能变更的个人资料
+        if (nickname) provider.nickname = nickname;
+        if (avatarUrl) provider.avatarUrl = avatarUrl;
+        if (profileUrl) provider.profileUrl = profileUrl;
+        if (email) provider.email = email;
+      }
+
+      await existingByPlatform.save();
+      return { user: existingByPlatform, isNew: false };
+    }
+
+    // ── 策略 2：邮箱匹配 → 绑定到已有账户 ──
+    if (email) {
+      const existingByEmail = await this.userModel.findOne({ email }).exec();
+
+      if (existingByEmail) {
+        this.logger.log(`邮箱匹配已有用户: ${email}，绑定 ${platform} 登录`);
+
+        // 检查是否已绑定同一平台（理论上不会到这里，因为策略1已覆盖）
+        const alreadyBound = existingByEmail.oauthProviders.some(
+          (p) => p.platform === platform,
+        );
+        if (alreadyBound) {
+          this.logger.warn(`用户 ${email} 已绑定 ${platform}，跳过重复绑定`);
+          return { user: existingByEmail, isNew: false };
+        }
+
+        // 追加密平台绑定
+        existingByEmail.oauthProviders.push({
+          platform,
+          platformUserId,
+          accessToken,
+          refreshToken: refreshToken ?? undefined,
+          tokenExpiresAt: tokenExpiresAt ?? undefined,
+          nickname: nickname ?? undefined,
+          avatarUrl: avatarUrl ?? undefined,
+          profileUrl: profileUrl ?? undefined,
+          email: email ?? undefined,
+        } as any);
+
+        await existingByEmail.save();
+        return { user: existingByEmail, isNew: false };
+      }
+    }
+
+    // ── 策略 3：全新用户 → 创建 ──
+    this.logger.log(`创建新 OAuth 用户: platform=${platform}`);
+
+    // 生成唯一用户名
+    const baseUsername =
+      (nickname || `${platform}_user`)
+        .replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '')
+        .substring(0, 20) || `${platform}_${platformUserId.substring(0, 8)}`;
+    const username = await this.generateUniqueUsername(baseUsername);
+
+    // 邮箱处理：OAuth 可能不返回邮箱
+    const userEmail = email || `${platform}_${platformUserId}@oauth.local`;
+
+    const newUser = await this.userModel.create({
+      username,
+      email: userEmail,
+      // OAuth 用户不设置密码
+      password: undefined,
+      loginAttempts: 0,
+      createdVia: platform,
+      oauthProviders: [
+        {
+          platform,
+          platformUserId,
+          accessToken,
+          refreshToken: refreshToken ?? undefined,
+          tokenExpiresAt: tokenExpiresAt ?? undefined,
+          nickname: nickname ?? undefined,
+          avatarUrl: avatarUrl ?? undefined,
+          profileUrl: profileUrl ?? undefined,
+          email: email ?? undefined,
+        },
+      ],
+    });
+
+    this.logger.log(
+      `OAuth 用户创建成功: ${newUser.email} (username: ${username})`,
+    );
+    return { user: newUser, isNew: true };
+  }
+
+  /**
+   * 生成唯一用户名
+   * 如果基准用户名已被占用，追加随机后缀直到找到唯一值
+   */
+  private async generateUniqueUsername(base: string): Promise<string> {
+    let username = base;
+    let attempts = 0;
+
+    while (attempts < 10) {
+      const exists = await this.userModel.findOne({ username }).exec();
+      if (!exists) return username;
+
+      // 追加 4 位随机数字
+      const suffix = Math.floor(1000 + Math.random() * 9000).toString();
+      username = `${base.substring(0, 16)}_${suffix}`;
+      attempts++;
+    }
+
+    // 极端情况：使用时间戳兜底
+    return `${base}_${Date.now().toString(36)}`;
   }
 }

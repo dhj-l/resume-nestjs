@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -13,22 +15,37 @@ import { UploadModule } from './common/upload/upload.module';
 import { TemplateModule } from './template/template.module';
 import { AiModule } from './ai/ai.module';
 import { ResumeAiModule } from './resume-ai/resume-ai.module';
+import { GiteeAuthModule } from './gitee-auth/gitee-auth.module';
 
 @Module({
   imports: [
-    MongooseModule.forRoot('mongodb://localhost:27017/ai-resume'),
+    ConfigModule.forRoot({ isGlobal: true }),
+
+    // 全局速率限制：每个 IP 每 60 秒最多 30 次请求
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 30 }]),
+
+    MongooseModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        uri: config.getOrThrow<string>('MONGODB_URI'),
+      }),
+    }),
     UserModule,
     ResumeModule,
     AuthModule,
-    JwtModule.register({
-      secret: 'secretKey',
-      signOptions: { expiresIn: '2d' },
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.getOrThrow<string>('JWT_SECRET'),
+        signOptions: { expiresIn: '2d' },
+      }),
       global: true,
     }),
     UploadModule,
     TemplateModule,
     AiModule,
     ResumeAiModule,
+    GiteeAuthModule,
   ],
   controllers: [AppController],
   providers: [
