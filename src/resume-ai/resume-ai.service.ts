@@ -1559,7 +1559,7 @@ export class ResumeAiService {
         await this.analysisRecordModel.findByIdAndUpdate(record._id, {
           status: AnalysisStatusEnum.Failed,
         });
-      } catch (_) {
+      } catch {
         // 状态更新失败不影响错误抛出
       }
       if (error instanceof BadRequestException) throw error;
