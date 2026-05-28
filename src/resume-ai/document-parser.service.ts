@@ -67,11 +67,18 @@ export class DocumentParserService {
   async parsePdf(url: string) {
     const parser = new PDFParse({
       url,
-      verbosity: 1, // 设置日志级别，1为ERRORS
+      verbosity: 1,
     });
-    const text = await parser.getText();
-    parser.destroy();
-    return text.text;
+    try {
+      const result = await parser.getText({
+        lineEnforce: true,
+        lineThreshold: 4.6,
+        pageJoiner: '\n',
+      });
+      return result.text;
+    } finally {
+      await parser.destroy();
+    }
   }
   /**
    * 解析doc文件
@@ -108,17 +115,18 @@ export class DocumentParserService {
     }
     return (
       text
-        //统一换行符
+        // 统一换行符
         .replace(/\r\n/g, '\n')
         .replace(/\r/g, '\n')
-        //去除文字之前的空格
-        .replace(/\s+/g, '')
+        // 移除控制字符（保留换行\n和普通空格）
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+        // 合并连续空行为最多两个换行
         .replace(/\n{3,}/g, '\n\n')
+        // 每行内部：合并多个空格为单个空格，去除首尾空格
         .split('\n')
-        .map((line) => line.trim())
+        .map((line) => line.replace(/ {2,}/g, ' ').trim())
         .join('\n')
-        .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
-        .replace(/ {2,}/g, ' ')
+        // 移除页码标记
         .replace(/第\s*\d+\s*页/g, '')
         .replace(/Page\s+\d+/gi, '')
         .trim()
