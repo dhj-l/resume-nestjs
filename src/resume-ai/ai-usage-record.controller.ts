@@ -43,6 +43,22 @@ export class AiUsageRecordController {
     }
   }
 
+  /**
+   * 获取全局 AI 用量统计数据
+   * GET /api/v1/admin/ai-usage-records/stats
+   * 注意：必须放在 :id 之前
+   */
+  @Get('stats')
+  async getStats() {
+    try {
+      return await this.aiUsageRecordService.getStats();
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
   @Delete(':id')
   async remove(@Param('id') id: string) {
     try {

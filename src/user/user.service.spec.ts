@@ -642,3 +642,289 @@ describe('UserService — findOrCreateOAuthUser', () => {
     });
   });
 });
+
+/* ------------------------------------------------------------------ */
+/*  UserService — findAll（分页 + 搜索 + 筛选）                       */
+/* ------------------------------------------------------------------ */
+
+describe('UserService — findAll', () => {
+  let service: UserService;
+  let mockModel: any;
+
+  beforeEach(async () => {
+    // 构建支持分页查询的 mock 模型
+    mockModel = {
+      find: jest.fn(),
+      countDocuments: jest.fn(),
+    };
+
+    // find 返回链式调用 mock
+    const chainObj = {
+      select: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn(),
+    };
+    mockModel.find.mockReturnValue(chainObj);
+
+    // countDocuments 返回 { exec }
+    const countChain = {
+      exec: jest.fn(),
+    };
+    mockModel.countDocuments.mockReturnValue(countChain);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        UserService,
+        { provide: getModelToken('User'), useValue: mockModel },
+        { provide: JwtService, useFactory: mockJwtService },
+        {
+          provide: TokenBlacklistService,
+          useFactory: mockTokenBlacklistService,
+        },
+      ],
+    }).compile();
+
+    service = module.get<UserService>(UserService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('应返回分页结果（默认参数）', async () => {
+    const mockItems = [
+      { _id: 'u1', username: 'alice', email: 'alice@example.com' },
+      { _id: 'u2', username: 'bob', email: 'bob@example.com' },
+    ];
+    mockModel.find().exec.mockResolvedValue(mockItems);
+    mockModel.countDocuments().exec.mockResolvedValue(2);
+
+    const result = await service.findAll({});
+
+    expect(result).toEqual({
+      items: mockItems,
+      total: 2,
+      page: 1,
+      pageSize: 10,
+    });
+    expect(mockModel.find).toHaveBeenCalledWith({});
+  });
+
+  it('应支持自定义分页参数', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(50);
+
+    const result = await service.findAll({ page: 3, pageSize: 20 });
+
+    expect(result.page).toBe(3);
+    expect(result.pageSize).toBe(20);
+
+    // skip 应为 (page - 1) * pageSize = 40
+    const chain = mockModel.find();
+    expect(chain.skip).toHaveBeenCalledWith(40);
+    expect(chain.limit).toHaveBeenCalledWith(20);
+  });
+
+  it('pageSize 超过 100 时应限制为 100', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(200);
+
+    const result = await service.findAll({ pageSize: 500 });
+
+    expect(result.pageSize).toBe(100);
+
+    const chain = mockModel.find();
+    expect(chain.limit).toHaveBeenCalledWith(100);
+  });
+
+  it('应按关键词搜索用户名或邮箱', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(0);
+
+    await service.findAll({ keyword: 'john' });
+
+    expect(mockModel.find).toHaveBeenCalledWith({
+      $or: [
+        { username: { $regex: 'john', $options: 'i' } },
+        { email: { $regex: 'john', $options: 'i' } },
+      ],
+    });
+  });
+
+  it('关键词中的正则特殊字符应被转义', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(0);
+
+    await service.findAll({ keyword: 'test+user' });
+
+    expect(mockModel.find).toHaveBeenCalledWith({
+      $or: [
+        { username: { $regex: 'test\\+user', $options: 'i' } },
+        { email: { $regex: 'test\\+user', $options: 'i' } },
+      ],
+    });
+  });
+
+  it('应按 createdVia 筛选', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(10);
+
+    await service.findAll({ createdVia: 'github' });
+
+    expect(mockModel.find).toHaveBeenCalledWith({ createdVia: 'github' });
+  });
+
+  it('应同时支持关键词和 createdVia 筛选', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(5);
+
+    await service.findAll({ keyword: 'dev', createdVia: 'gitee' });
+
+    expect(mockModel.find).toHaveBeenCalledWith({
+      $or: [
+        { username: { $regex: 'dev', $options: 'i' } },
+        { email: { $regex: 'dev', $options: 'i' } },
+      ],
+      createdVia: 'gitee',
+    });
+  });
+
+  it('countDocuments 应使用相同的 filter', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(1);
+
+    await service.findAll({ createdVia: 'qq' });
+
+    expect(mockModel.countDocuments).toHaveBeenCalledWith({
+      createdVia: 'qq',
+    });
+  });
+
+  it('应排除密码字段', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(0);
+
+    await service.findAll({});
+
+    const chain = mockModel.find();
+    expect(chain.select).toHaveBeenCalledWith('-password');
+  });
+
+  it('应按 createdAt 降序排列', async () => {
+    mockModel.find().exec.mockResolvedValue([]);
+    mockModel.countDocuments().exec.mockResolvedValue(0);
+
+    await service.findAll({});
+
+    const chain = mockModel.find();
+    expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  UserService — getUserStats                                        */
+/* ------------------------------------------------------------------ */
+
+describe('UserService — getUserStats', () => {
+  let service: UserService;
+  let mockModel: any;
+
+  beforeEach(async () => {
+    mockModel = {
+      countDocuments: jest.fn(),
+      aggregate: jest.fn(),
+    };
+
+    // countDocuments 返回 { exec }
+    const execChain = {
+      exec: jest.fn(),
+    };
+    mockModel.countDocuments.mockReturnValue(execChain);
+
+    // aggregate 直接返回结果
+    mockModel.aggregate.mockReturnValue({
+      exec: jest.fn(),
+    });
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        UserService,
+        { provide: getModelToken('User'), useValue: mockModel },
+        { provide: JwtService, useFactory: mockJwtService },
+        {
+          provide: TokenBlacklistService,
+          useFactory: mockTokenBlacklistService,
+        },
+      ],
+    }).compile();
+
+    service = module.get<UserService>(UserService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('应返回用户统计数据', async () => {
+    mockModel.countDocuments().exec
+      .mockResolvedValueOnce(100) // 总用户数
+      .mockResolvedValueOnce(15); // 本月新增
+
+    mockModel.aggregate().exec.mockResolvedValue([
+      { _id: 'email', count: 60 },
+      { _id: 'github', count: 25 },
+      { _id: 'gitee', count: 10 },
+      { _id: 'qq', count: 5 },
+    ]);
+
+    const result = await service.getUserStats();
+
+    expect(result.totalUsers).toBe(100);
+    expect(result.newThisMonth).toBe(15);
+    expect(result.byPlatform).toEqual({
+      email: 60,
+      github: 25,
+      gitee: 10,
+      qq: 5,
+    });
+  });
+
+  it('空数据库时应返回零值', async () => {
+    mockModel.countDocuments().exec
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0);
+    mockModel.aggregate().exec.mockResolvedValue([]);
+
+    const result = await service.getUserStats();
+
+    expect(result.totalUsers).toBe(0);
+    expect(result.newThisMonth).toBe(0);
+    expect(result.byPlatform).toEqual({});
+  });
+
+  it('aggregate 应按 createdVia 分组', async () => {
+    mockModel.countDocuments().exec.mockResolvedValue(10);
+    mockModel.aggregate().exec.mockResolvedValue([]);
+
+    await service.getUserStats();
+
+    expect(mockModel.aggregate).toHaveBeenCalledWith([
+      { $group: { _id: '$createdVia', count: { $sum: 1 } } },
+    ]);
+  });
+
+  it('_id 为 null 的分组应映射为 email', async () => {
+    mockModel.countDocuments().exec
+      .mockResolvedValueOnce(50)
+      .mockResolvedValueOnce(10);
+    mockModel.aggregate().exec.mockResolvedValue([
+      { _id: null, count: 50 },
+    ]);
+
+    const result = await service.getUserStats();
+
+    expect(result.byPlatform).toEqual({ email: 50 });
+  });
+});

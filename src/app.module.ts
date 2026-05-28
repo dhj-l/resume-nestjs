@@ -20,6 +20,7 @@ import { GiteeAuthModule } from './gitee-auth/gitee-auth.module';
 import { GitHubAuthModule } from './github-auth/github-auth.module';
 import { QQAuthModule } from './qq-auth/qq-auth.module';
 import { CryptoModule } from './common/crypto.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { CryptoModule } from './common/crypto.module';
     GiteeAuthModule,
     GitHubAuthModule,
     QQAuthModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [

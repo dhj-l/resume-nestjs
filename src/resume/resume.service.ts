@@ -23,6 +23,7 @@ import puppeteer from 'puppeteer';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { GetResumeDto } from './dto/get-resume.dto';
+import { AdminQueryResumeDto } from './dto/admin-query-resume.dto';
 
 type SortableItem = {
   globalSort?: number;
@@ -612,5 +613,147 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
       `用户 ${userId} 成功复制简历 ${id}，新简历 ID: ${newResume._id.toString()}`,
     );
     return newResume;
+  }
+
+  // ──────────────────────────────────────
+  //  管理员方法（跨用户，无 userId 限制）
+  //  TODO: 当角色系统完善后添加 AdminGuard
+  // ──────────────────────────────────────
+
+  /**
+   * 管理员查询所有简历（跨用户，分页 + 搜索 + 筛选）
+   * @param query 查询参数
+   */
+  async adminFindAll(query: AdminQueryResumeDto): Promise<{
+    items: Resume[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const pageSize =
+      query.pageSize && query.pageSize > 0 ? Math.min(query.pageSize, 100) : 10;
+    const skip = (page - 1) * pageSize;
+    const filter: Record<string, unknown> = {};
+
+    // 关键词搜索：标题
+    if (query.keyword) {
+      const escaped = query.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.title = { $regex: escaped, $options: 'i' };
+    }
+
+    // 按用户筛选
+    if (query.userId) {
+      filter.userId = query.userId;
+    }
+
+    // 按类型筛选
+    if (query.type) {
+      filter.type = query.type;
+    }
+
+    // 是否模板
+    if (query.isTemplate !== undefined) {
+      filter.isTemplate = query.isTemplate;
+    }
+
+    const [items, total] = await Promise.all([
+      this.resumeModel
+        .find(filter)
+        .select([
+          '_id',
+          'userId',
+          'title',
+          'cover',
+          'isTemplate',
+          'type',
+          'createdAt',
+          'updatedAt',
+        ])
+        .skip(skip)
+        .limit(pageSize)
+        .sort({ createdAt: -1 })
+        .exec(),
+      this.resumeModel.countDocuments(filter).exec(),
+    ]);
+
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * 管理员查看任意简历详情（无 userId 限制）
+   * @param id 简历 ID
+   * @returns 简历完整数据
+   */
+  async adminFindOne(id: string): Promise<Resume> {
+    const resume = await this.resumeModel.findById(id).exec();
+    if (!resume) {
+      throw new NotFoundException('简历不存在');
+    }
+    return resume;
+  }
+
+  /**
+   * 管理员删除任意简历（无 userId 限制）
+   * @param id 简历 ID
+   * @returns 被删除的简历
+   */
+  async adminRemove(id: string): Promise<Resume> {
+    const resume = await this.resumeModel.findByIdAndDelete(id).exec();
+    if (!resume) {
+      throw new NotFoundException('简历不存在');
+    }
+
+    this.logger.log(`管理员删除简历 ${id}`);
+
+    // 级联删除关联数据
+    try {
+      const [aiResult, editResult, analysisResult] = await Promise.all([
+        this.resumeAiModel.deleteMany({
+          $or: [{ generatedResumeId: id }, { resumeId: id }],
+        }),
+        this.editRecordModel.deleteMany({ resumeId: id }),
+        this.analysisRecordModel.deleteMany({ resumeId: id }),
+      ]);
+      this.logger.log(
+        `级联删除完成: AI记录${aiResult.deletedCount}条, ` +
+          `编辑记录${editResult.deletedCount}条, ` +
+          `分析记录${analysisResult.deletedCount}条`,
+      );
+    } catch (cascadeError) {
+      this.logger.error(
+        `级联删除关联记录失败（简历 ${id} 已删除）: ${(cascadeError as Error).message}`,
+      );
+    }
+
+    return resume;
+  }
+
+  /**
+   * 简历统计数据（管理员用）
+   * @returns 简历总数、模板数、按类型分布
+   */
+  async adminGetStats(): Promise<{
+    totalResumes: number;
+    totalTemplates: number;
+    totalNonTemplates: number;
+    byType: Record<string, number>;
+  }> {
+    const [totalResumes, totalTemplates, totalNonTemplates, byType] =
+      await Promise.all([
+        this.resumeModel.countDocuments().exec(),
+        this.resumeModel.countDocuments({ isTemplate: true }).exec(),
+        this.resumeModel.countDocuments({ isTemplate: false }).exec(),
+        this.resumeModel
+          .aggregate([{ $group: { _id: '$type', count: { $sum: 1 } } }])
+          .exec(),
+      ]);
+
+    const typeMap: Record<string, number> = {};
+    for (const item of byType) {
+      typeMap[item._id || 'default'] = item.count;
+    }
+
+    return { totalResumes, totalTemplates, totalNonTemplates, byType: typeMap };
   }
 }

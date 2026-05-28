@@ -15,6 +15,7 @@ import { LoginDto } from './dto/login-dto';
 import { JwtService } from '@nestjs/jwt';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { TokenBlacklistService } from '../auth/token-blacklist.service';
+import { QueryUserDto } from './dto/query-user.dto';
 
 @Injectable()
 export class UserService {
@@ -192,11 +193,80 @@ export class UserService {
   }
 
   /**
-   * 获取所有用户列表
-   * @returns 用户数组(不包含密码)
+   * 获取所有用户列表（支持分页、关键词搜索、注册来源筛选）
+   * @param query 查询参数（page, pageSize, keyword, createdVia）
+   * @returns 分页用户列表
    */
-  async findAll(): Promise<User[]> {
-    return this.userModel.find().select('-password').exec();
+  async findAll(query: QueryUserDto): Promise<{
+    items: User[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const pageSize =
+      query.pageSize && query.pageSize > 0 ? Math.min(query.pageSize, 100) : 10;
+    const skip = (page - 1) * pageSize;
+
+    // 构建筛选条件
+    const filter: Record<string, unknown> = {};
+
+    // 关键词搜索：模糊匹配用户名或邮箱
+    if (query.keyword) {
+      const escaped = query.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [
+        { username: { $regex: escaped, $options: 'i' } },
+        { email: { $regex: escaped, $options: 'i' } },
+      ];
+    }
+
+    // 按注册来源筛选
+    if (query.createdVia) {
+      filter.createdVia = query.createdVia;
+    }
+
+    const [items, total] = await Promise.all([
+      this.userModel
+        .find(filter)
+        .select('-password')
+        .skip(skip)
+        .limit(pageSize)
+        .sort({ createdAt: -1 })
+        .exec(),
+      this.userModel.countDocuments(filter).exec(),
+    ]);
+
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * 获取用户统计数据（管理员用）
+   * @returns 用户总数、本月新增、按注册来源分布
+   */
+  async getUserStats(): Promise<{
+    totalUsers: number;
+    newThisMonth: number;
+    byPlatform: Record<string, number>;
+  }> {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [totalUsers, newThisMonth, byPlatform] = await Promise.all([
+      this.userModel.countDocuments().exec(),
+      this.userModel
+        .countDocuments({ createdAt: { $gte: startOfMonth } })
+        .exec(),
+      this.userModel
+        .aggregate([{ $group: { _id: '$createdVia', count: { $sum: 1 } } }])
+        .exec(),
+    ]);
+
+    const platformMap: Record<string, number> = {};
+    for (const item of byPlatform) {
+      platformMap[item._id || 'email'] = item.count;
+    }
+
+    return { totalUsers, newThisMonth, byPlatform: platformMap };
   }
 
   /**

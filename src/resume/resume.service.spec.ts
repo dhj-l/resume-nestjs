@@ -275,3 +275,400 @@ describe('ResumeService — Puppeteer 浏览器生命周期', () => {
     });
   });
 });
+
+/* ------------------------------------------------------------------ */
+/*  ResumeService — 管理员方法 (adminFindAll / adminFindOne /          */
+/*                  adminRemove / adminGetStats)                       */
+/* ------------------------------------------------------------------ */
+
+describe('ResumeService — 管理员方法', () => {
+  let service: ResumeService;
+  let mockResumeModel: any;
+  let mockAiModel: any;
+  let mockEditRecordModel: any;
+  let mockAnalysisRecordModel: any;
+  let mockTemplateModel: any;
+
+  beforeEach(async () => {
+    // 构建支持分页的 mock
+    const chainObj = {
+      select: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn(),
+    };
+
+    mockResumeModel = {
+      find: jest.fn().mockReturnValue(chainObj),
+      findById: jest.fn(),
+      findByIdAndDelete: jest.fn(),
+      countDocuments: jest.fn(),
+      aggregate: jest.fn(),
+    };
+
+    mockAiModel = {
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+    };
+    mockEditRecordModel = {
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+    };
+    mockAnalysisRecordModel = {
+      deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
+    };
+    mockTemplateModel = buildMockModel();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ResumeService,
+        {
+          provide: getModelToken('Resume'),
+          useValue: mockResumeModel,
+        },
+        {
+          provide: getModelToken('Template'),
+          useValue: mockTemplateModel,
+        },
+        {
+          provide: getModelToken('ResumeAi'),
+          useValue: mockAiModel,
+        },
+        {
+          provide: getModelToken('ResumeEditRecord'),
+          useValue: mockEditRecordModel,
+        },
+        {
+          provide: getModelToken('ResumeAnalysisRecord'),
+          useValue: mockAnalysisRecordModel,
+        },
+      ],
+    }).compile();
+
+    service = module.get<ResumeService>(ResumeService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  /* ================================================================ */
+  /*  adminFindAll                                                     */
+  /* ================================================================ */
+  describe('adminFindAll', () => {
+    it('应返回分页结果（默认参数）', async () => {
+      const mockItems = [
+        { _id: 'r1', title: '简历1', userId: 'u1' },
+        { _id: 'r2', title: '简历2', userId: 'u2' },
+      ];
+      mockResumeModel.find().exec.mockResolvedValue(mockItems);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(2),
+      });
+
+      const result = await service.adminFindAll({});
+
+      expect(result).toEqual({
+        items: mockItems,
+        total: 2,
+        page: 1,
+        pageSize: 10,
+      });
+      expect(mockResumeModel.find).toHaveBeenCalledWith({});
+    });
+
+    it('应按关键词搜索标题', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.adminFindAll({ keyword: '前端' });
+
+      expect(mockResumeModel.find).toHaveBeenCalledWith({
+        title: { $regex: '前端', $options: 'i' },
+      });
+    });
+
+    it('应按 userId 筛选', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.adminFindAll({ userId: 'user-1' });
+
+      expect(mockResumeModel.find).toHaveBeenCalledWith({
+        userId: 'user-1',
+      });
+    });
+
+    it('应按 type 筛选', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.adminFindAll({ type: 'creative' });
+
+      expect(mockResumeModel.find).toHaveBeenCalledWith({
+        type: 'creative',
+      });
+    });
+
+    it('isTemplate=true 应筛选模板简历', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.adminFindAll({ isTemplate: true });
+
+      expect(mockResumeModel.find).toHaveBeenCalledWith({
+        isTemplate: true,
+      });
+    });
+
+    it('isTemplate=false 应筛选非模板简历', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.adminFindAll({ isTemplate: false });
+
+      expect(mockResumeModel.find).toHaveBeenCalledWith({
+        isTemplate: false,
+      });
+    });
+
+    it('isTemplate 为 undefined 时不应加入筛选', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.adminFindAll({});
+
+      expect(mockResumeModel.find).toHaveBeenCalledWith({});
+    });
+
+    it('应支持自定义分页', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(100),
+      });
+
+      const result = await service.adminFindAll({ page: 5, pageSize: 25 });
+
+      expect(result.page).toBe(5);
+      expect(result.pageSize).toBe(25);
+
+      const chain = mockResumeModel.find();
+      expect(chain.skip).toHaveBeenCalledWith(100);
+      expect(chain.limit).toHaveBeenCalledWith(25);
+    });
+
+    it('pageSize 超过 100 时应限制为 100', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      const result = await service.adminFindAll({ pageSize: 999 });
+
+      expect(result.pageSize).toBe(100);
+    });
+
+    it('应排除敏感字段只返回列表字段', async () => {
+      mockResumeModel.find().exec.mockResolvedValue([]);
+      mockResumeModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.adminFindAll({});
+
+      const chain = mockResumeModel.find();
+      expect(chain.select).toHaveBeenCalledWith([
+        '_id',
+        'userId',
+        'title',
+        'cover',
+        'isTemplate',
+        'type',
+        'createdAt',
+        'updatedAt',
+      ]);
+    });
+  });
+
+  /* ================================================================ */
+  /*  adminFindOne                                                     */
+  /* ================================================================ */
+  describe('adminFindOne', () => {
+    it('应返回简历详情', async () => {
+      const mockResume = {
+        _id: 'resume-1',
+        title: '我的简历',
+        userId: 'user-1',
+        basicInfo: { name: '张三' },
+      };
+      mockResumeModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(mockResume),
+      });
+
+      const result = await service.adminFindOne('resume-1');
+
+      expect(result).toEqual(mockResume);
+      expect(mockResumeModel.findById).toHaveBeenCalledWith('resume-1');
+    });
+
+    it('简历不存在时应抛 NotFoundException', async () => {
+      mockResumeModel.findById.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      });
+
+      await expect(service.adminFindOne('nonexistent')).rejects.toThrow(
+        '简历不存在',
+      );
+    });
+  });
+
+  /* ================================================================ */
+  /*  adminRemove                                                      */
+  /* ================================================================ */
+  describe('adminRemove', () => {
+    it('应删除简历并返回被删除的文档', async () => {
+      const mockDeleted = {
+        _id: 'resume-1',
+        title: '我的简历',
+      };
+      mockResumeModel.findByIdAndDelete.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(mockDeleted),
+      });
+
+      const result = await service.adminRemove('resume-1');
+
+      expect(result).toEqual(mockDeleted);
+      expect(mockResumeModel.findByIdAndDelete).toHaveBeenCalledWith(
+        'resume-1',
+      );
+    });
+
+    it('应级联删除关联的 AI/编辑/分析记录', async () => {
+      mockResumeModel.findByIdAndDelete.mockReturnValue({
+        exec: jest.fn().mockResolvedValue({ _id: 'resume-1' }),
+      });
+      mockAiModel.deleteMany.mockResolvedValue({ deletedCount: 3 });
+      mockEditRecordModel.deleteMany.mockResolvedValue({ deletedCount: 2 });
+      mockAnalysisRecordModel.deleteMany.mockResolvedValue({
+        deletedCount: 1,
+      });
+
+      await service.adminRemove('resume-1');
+
+      expect(mockAiModel.deleteMany).toHaveBeenCalledWith({
+        $or: [{ generatedResumeId: 'resume-1' }, { resumeId: 'resume-1' }],
+      });
+      expect(mockEditRecordModel.deleteMany).toHaveBeenCalledWith({
+        resumeId: 'resume-1',
+      });
+      expect(mockAnalysisRecordModel.deleteMany).toHaveBeenCalledWith({
+        resumeId: 'resume-1',
+      });
+    });
+
+    it('级联删除失败不应阻塞主流程', async () => {
+      mockResumeModel.findByIdAndDelete.mockReturnValue({
+        exec: jest.fn().mockResolvedValue({ _id: 'resume-1' }),
+      });
+      mockAiModel.deleteMany.mockRejectedValue(new Error('删除关联数据失败'));
+
+      const result = await service.adminRemove('resume-1');
+
+      // 主删除成功
+      expect(result).toEqual({ _id: 'resume-1' });
+    });
+
+    it('简历不存在时应抛 NotFoundException', async () => {
+      mockResumeModel.findByIdAndDelete.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      });
+
+      await expect(service.adminRemove('nonexistent')).rejects.toThrow(
+        '简历不存在',
+      );
+    });
+  });
+
+  /* ================================================================ */
+  /*  adminGetStats                                                    */
+  /* ================================================================ */
+  describe('adminGetStats', () => {
+    /**
+     * adminGetStats 中 countDocuments 调用方式:
+     *   countDocuments().exec()
+     *   countDocuments({ isTemplate: true }).exec()
+     *   countDocuments({ isTemplate: false }).exec()
+     * 所以 mock 必须返回 { exec: fn } 链式对象
+     */
+    it('应返回简历统计数据', async () => {
+      mockResumeModel.countDocuments = jest.fn((filter?: any) => ({
+        exec: jest.fn().mockResolvedValue(
+          (() => {
+            if (!filter || Object.keys(filter).length === 0) return 220;
+            if (filter?.isTemplate === true) return 20;
+            if (filter?.isTemplate === false) return 200;
+            return 0;
+          })(),
+        ),
+      }));
+      mockResumeModel.aggregate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          { _id: 'default', count: 150 },
+          { _id: 'creative', count: 50 },
+          { _id: 'classic', count: 20 },
+        ]),
+      });
+
+      const result = await service.adminGetStats();
+
+      expect(result.totalResumes).toBe(220);
+      expect(result.totalTemplates).toBe(20);
+      expect(result.totalNonTemplates).toBe(200);
+      expect(result.byType).toEqual({
+        default: 150,
+        creative: 50,
+        classic: 20,
+      });
+    });
+
+    it('空数据库时应返回零值', async () => {
+      mockResumeModel.countDocuments = jest.fn(() => ({
+        exec: jest.fn().mockResolvedValue(0),
+      }));
+      mockResumeModel.aggregate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([]),
+      });
+
+      const result = await service.adminGetStats();
+
+      expect(result.totalResumes).toBe(0);
+      expect(result.totalTemplates).toBe(0);
+      expect(result.totalNonTemplates).toBe(0);
+      expect(result.byType).toEqual({});
+    });
+
+    it('_id 为 undefined 时应映射为 default', async () => {
+      mockResumeModel.countDocuments = jest.fn(() => ({
+        exec: jest.fn().mockResolvedValue(10),
+      }));
+      mockResumeModel.aggregate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([{ _id: undefined, count: 10 }]),
+      });
+
+      const result = await service.adminGetStats();
+
+      expect(result.byType).toEqual({ default: 10 });
+    });
+  });
+});

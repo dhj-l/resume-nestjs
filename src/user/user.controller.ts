@@ -9,6 +9,7 @@ import {
   UseGuards,
   Req,
   ForbiddenException,
+  Query,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { UserService } from './user.service';
@@ -20,6 +21,7 @@ import type { Request } from 'express';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { extractBearerToken } from '../common/utils/token';
+import { QueryUserDto } from './dto/query-user.dto';
 
 // 为请求对象增加用户类型,避免 any 引发的类型风险
 type RequestWithUser = Request & {
@@ -62,19 +64,15 @@ export class UserController {
   }
 
   /**
-   * 获取所有用户列表(仅管理员)
-   * @param req 请求对象,包含用户信息
-   * @returns 用户数组
+   * 获取所有用户列表(支持分页、搜索、筛选)
+   * TODO: 当角色系统完善后添加 AdminGuard 限制仅管理员可访问
+   * @param query 查询参数（page, pageSize, keyword, createdVia）
+   * @returns 分页用户列表
    */
   @UseGuards(JwtAuthGuard)
   @Get()
-  async findAll(@Req() req: RequestWithUser) {
-    // 只允许管理员查看所有用户列表
-    // const isAdmin = req.user.role === 'admin';
-    // if (!isAdmin) {
-    //   throw new ForbiddenException('没有权限查看所有用户');
-    // }
-    return this.userService.findAll();
+  async findAll(@Query() query: QueryUserDto) {
+    return this.userService.findAll(query);
   }
 
   /**
