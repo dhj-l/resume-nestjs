@@ -488,17 +488,13 @@ export class UserService {
       email: email ?? undefined,
     };
 
-    // 构建原子查找条件：同平台同 ID 或已验证邮箱
-    const orConditions: Record<string, unknown>[] = [
-      {
-        oauthProviders: { $elemMatch: { platform, platformUserId } },
-      },
-    ];
-    if (verifiedEmail) {
-      orConditions.push({ email: verifiedEmail });
-    }
+    // 构建共享的 arrayFilter（策略 1 更新 / 竞态恢复共用）
+    const elemFilter = {
+      'elem.platform': platform,
+      'elem.platformUserId': platformUserId,
+    };
 
-    // ── Phase 1: 原子查找+更新（策略 1 + 2）──
+    // 构建完整的 provider 更新字段集合
     const providerUpdate: Record<string, unknown> = {
       'oauthProviders.$[elem].accessToken': accessToken,
     };
@@ -515,28 +511,42 @@ export class UserService {
     if (email !== undefined)
       providerUpdate['oauthProviders.$[elem].email'] = email;
 
-    const existing = await this.userModel
+    // ── Phase 1a: 策略 1 — 同平台同 ID，原子更新令牌 ──
+    const existingByPlatform = await this.userModel
       .findOneAndUpdate(
-        { $or: orConditions },
-        {
-          $addToSet: { oauthProviders: providerData },
-          $set: providerUpdate,
-        },
-        {
-          new: true,
-          arrayFilters: [
-            {
-              'elem.platform': platform,
-              'elem.platformUserId': platformUserId,
-            },
-          ],
-        },
+        { oauthProviders: { $elemMatch: { platform, platformUserId } } },
+        { $set: providerUpdate },
+        { new: true, arrayFilters: [elemFilter] },
       )
       .exec();
 
-    if (existing) {
-      this.logger.log(`已有 OAuth 绑定用户: ${existing.email}`);
-      return { user: existing, isNew: false };
+    if (existingByPlatform) {
+      this.logger.log(
+        `已有 OAuth 绑定用户（同平台同ID）: ${existingByPlatform.email}`,
+      );
+      return { user: existingByPlatform, isNew: false };
+    }
+
+    // ── Phase 1b: 策略 2 — 已验证邮箱匹配，追加密平台绑定 ──
+    if (verifiedEmail) {
+      const existingByEmail = await this.userModel
+        .findOneAndUpdate(
+          {
+            email: verifiedEmail,
+            // 仅当该平台尚未绑定时才追加，避免重复绑定
+            'oauthProviders.platform': { $ne: platform },
+          },
+          { $push: { oauthProviders: providerData } },
+          { new: true },
+        )
+        .exec();
+
+      if (existingByEmail) {
+        this.logger.log(
+          `邮箱匹配已有用户: ${verifiedEmail}，绑定 ${platform} 登录`,
+        );
+        return { user: existingByEmail, isNew: false };
+      }
     }
 
     // ── Phase 2: 创建新用户（策略 3）──
@@ -573,39 +583,41 @@ export class UserService {
           `OAuth 用户创建遇到竞态 (duplicate key), 重试查找: platform=${platform}`,
         );
 
-        // 先尝试按 OAuth 身份/邮箱找到已有用户
-        const retryProviderUpdate: Record<string, unknown> = {
-          'oauthProviders.$[elem].accessToken': accessToken,
-        };
-        if (refreshToken !== undefined)
-          retryProviderUpdate['oauthProviders.$[elem].refreshToken'] =
-            refreshToken;
-        if (tokenExpiresAt !== undefined)
-          retryProviderUpdate['oauthProviders.$[elem].tokenExpiresAt'] =
-            tokenExpiresAt;
-
-        const user = await this.userModel
+        // 重试 Phase 1a：同平台同 ID 查找（复用完整 providerUpdate）
+        const retryPlatformUser = await this.userModel
           .findOneAndUpdate(
-            { $or: orConditions },
-            {
-              $addToSet: { oauthProviders: providerData },
-              $set: retryProviderUpdate,
-            },
-            {
-              new: true,
-              arrayFilters: [
-                {
-                  'elem.platform': platform,
-                  'elem.platformUserId': platformUserId,
-                },
-              ],
-            },
+            { oauthProviders: { $elemMatch: { platform, platformUserId } } },
+            { $set: providerUpdate },
+            { new: true, arrayFilters: [elemFilter] },
           )
           .exec();
 
-        if (user) {
-          this.logger.log(`竞态恢复成功: ${user.email}`);
-          return { user, isNew: false };
+        if (retryPlatformUser) {
+          this.logger.log(
+            `竞态恢复成功（同平台同ID）: ${retryPlatformUser.email}`,
+          );
+          return { user: retryPlatformUser, isNew: false };
+        }
+
+        // 重试 Phase 1b：已验证邮箱匹配
+        if (verifiedEmail) {
+          const retryEmailUser = await this.userModel
+            .findOneAndUpdate(
+              {
+                email: verifiedEmail,
+                'oauthProviders.platform': { $ne: platform },
+              },
+              { $push: { oauthProviders: providerData } },
+              { new: true },
+            )
+            .exec();
+
+          if (retryEmailUser) {
+            this.logger.log(
+              `竞态恢复成功（邮箱匹配）: ${retryEmailUser.email}`,
+            );
+            return { user: retryEmailUser, isNew: false };
+          }
         }
 
         // Phase 1 重试未找到用户 → 可能是 username 唯一索引冲突
