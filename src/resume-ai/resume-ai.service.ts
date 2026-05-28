@@ -70,6 +70,14 @@ import {
   AiFunctionEnum,
 } from './entities/ai-usage-record.entity';
 
+/**
+ * 将数组格式化为 Markdown 列表字符串，空数组返回「无」
+ */
+function listOrNone(arr: string[] | undefined | null): string {
+  if (!arr || arr.length === 0) return '无';
+  return arr.map((item) => `\`${item}\``).join('、');
+}
+
 @Injectable()
 export class ResumeAiService {
   private readonly logger = new Logger(ResumeAiService.name);
@@ -1612,6 +1620,244 @@ export class ResumeAiService {
       .select('-__v')
       .lean();
     return data;
+  }
+
+  /**
+   * 导出 AI 分析结果为 Markdown 格式
+   * @param id 分析记录 ID
+   * @param userId 用户 ID
+   * @returns Markdown 字符串
+   */
+  async exportAnalysisMd(id: string, userId: string): Promise<string> {
+    const record = await this.analysisRecordModel
+      .findOne({ _id: id, userId })
+      .select('-__v')
+      .lean();
+
+    if (!record) {
+      throw new BadRequestException('分析记录不存在');
+    }
+
+    if (record.status !== AnalysisStatusEnum.Completed) {
+      throw new BadRequestException('分析尚未完成，无法导出');
+    }
+
+    const a = record.analysisResult || {};
+    const lines: string[] = [];
+
+    // 标题
+    lines.push('# 简历分析报告');
+    lines.push('');
+
+    // 基本信息
+    const meta = a.meta || {};
+    lines.push('## 基本信息');
+    lines.push('');
+    if (meta.candidate_name) lines.push(`- **候选人**：${meta.candidate_name}`);
+    if (meta.target_position)
+      lines.push(`- **目标岗位**：${meta.target_position}`);
+    if (meta.analysis_date)
+      lines.push(`- **分析日期**：${meta.analysis_date}`);
+    lines.push(`- **目标 JD**：${record.jobDescription}`);
+    lines.push('');
+
+    // 综合评分
+    const levelLabel: Record<string, string> = {
+      excellent: '优秀',
+      strong: '较强',
+      moderate: '中等',
+      weak: '较弱',
+      poor: '较差',
+    };
+    lines.push('## 综合评分');
+    lines.push('');
+    lines.push(
+      `**总分：${a.overall_score ?? '—'}/100**　|　竞争力等级：${levelLabel[a.competitiveness_level] || a.competitiveness_level || '—'}`,
+    );
+    lines.push('');
+
+    // 各维度评分
+    lines.push('## 各维度评分');
+    lines.push('');
+    const dimensions = a.dimension_scores || [];
+    if (dimensions.length > 0) {
+      lines.push('| 维度 | 得分 | 权重 | 评价 |');
+      lines.push('|------|------|------|------|');
+      for (const d of dimensions) {
+        const pct = d.weight != null ? `${Math.round(d.weight * 100)}%` : '—';
+        lines.push(
+          `| ${d.name || '—'} | ${d.score ?? '—'}/${d.max ?? 100} | ${pct} | ${d.comment || '—'} |`,
+        );
+      }
+    } else {
+      lines.push('（暂无数据）');
+    }
+    lines.push('');
+
+    // 优势亮点
+    lines.push('## 优势亮点');
+    lines.push('');
+    const strengths = a.strengths || [];
+    if (strengths.length > 0) {
+      for (const s of strengths) {
+        lines.push(`### ${s.title || '—'}`);
+        lines.push(`- **分类**：${s.category || '—'}`);
+        lines.push(`- ${s.description || '—'}`);
+        lines.push('');
+      }
+    } else {
+      lines.push('（暂无数据）');
+      lines.push('');
+    }
+
+    // 待改进项
+    lines.push('## 待改进项');
+    lines.push('');
+    const weaknesses = a.weaknesses || [];
+    if (weaknesses.length > 0) {
+      const severityLabel: Record<string, string> = {
+        critical: '🔴 严重',
+        major: '🟠 主要',
+        minor: '🟡 次要',
+      };
+      for (const w of weaknesses) {
+        lines.push(
+          `### ${w.title || '—'} [${severityLabel[w.severity] || w.severity || '—'}]`,
+        );
+        lines.push(`- **分类**：${w.category || '—'}`);
+        lines.push(`- **问题**：${w.description || '—'}`);
+        if (w.suggestion) lines.push(`- **建议**：${w.suggestion}`);
+        lines.push('');
+      }
+    } else {
+      lines.push('（暂无数据）');
+      lines.push('');
+    }
+
+    // 改进建议
+    lines.push('## 改进建议');
+    lines.push('');
+    const suggestions = a.suggestions || [];
+    if (suggestions.length > 0) {
+      const priorityLabel: Record<string, string> = {
+        high: '🔴 高',
+        medium: '🟠 中',
+        low: '🟢 低',
+      };
+      for (const sug of suggestions) {
+        lines.push(
+          `- **[${priorityLabel[sug.priority] || sug.priority || '—'}] ${sug.category || '—'}**（${sug.timeline || '—'}）`,
+        );
+        lines.push(`  ${sug.action || '—'}`);
+      }
+    } else {
+      lines.push('（暂无数据）');
+    }
+    lines.push('');
+
+    // 市场分析
+    lines.push('## 市场分析');
+    lines.push('');
+    const market = a.market_analysis || {};
+    if (Object.keys(market).length > 0) {
+      if (market.position_demand)
+        lines.push(`- **岗位需求热度**：${market.position_demand}`);
+      if (market.competition_intensity)
+        lines.push(`- **竞争强度**：${market.competition_intensity}`);
+      if (market.candidate_positioning)
+        lines.push(`- **候选人定位**：${market.candidate_positioning}`);
+      if (market.salary_competitiveness_note)
+        lines.push(
+          `- **薪资竞争力**：${market.salary_competitiveness_note}`,
+        );
+    } else {
+      lines.push('（暂无数据）');
+    }
+    lines.push('');
+
+    // 技术评估
+    lines.push('## 技术评估');
+    lines.push('');
+    const tech = a.technology_assessment || {};
+    if (Object.keys(tech).length > 0) {
+      if (tech.tech_stack_score != null)
+        lines.push(`- **技术栈评分**：${tech.tech_stack_score}`);
+      if (tech.tech_stack_summary)
+        lines.push(`- **总体评价**：${tech.tech_stack_summary}`);
+      lines.push(
+        `- **匹配技能**：${listOrNone(tech.matching_skills)}`,
+      );
+      lines.push(
+        `- **缺失关键技能**：${listOrNone(tech.missing_critical_skills)}`,
+      );
+      lines.push(
+        `- **热门技能优势**：${listOrNone(tech.trending_skills_advantage)}`,
+      );
+      lines.push(
+        `- **过时/风险技能**：${listOrNone(tech.outdated_or_risk_skills)}`,
+      );
+    } else {
+      lines.push('（暂无数据）');
+    }
+    lines.push('');
+
+    // 职业发展分析
+    lines.push('## 职业发展分析');
+    lines.push('');
+    const career = a.career_analysis || {};
+    if (Object.keys(career).length > 0) {
+      if (career.career_stage)
+        lines.push(`- **职业阶段**：${career.career_stage}`);
+      if (career.trajectory_assessment)
+        lines.push(`- **发展轨迹**：${career.trajectory_assessment}`);
+      if (career.growth_rate)
+        lines.push(`- **成长速度**：${career.growth_rate}`);
+      if (career.estimated_work_years)
+        lines.push(
+          `- **预估工作年限**：${career.estimated_work_years}`,
+        );
+      const flags = career.red_flags || [];
+      lines.push(`- **预警信号**：${listOrNone(flags)}`);
+    } else {
+      lines.push('（暂无数据）');
+    }
+    lines.push('');
+
+    // 核心发现
+    lines.push('## 核心发现');
+    lines.push('');
+    const findings = a.key_findings || [];
+    if (findings.length > 0) {
+      const severityLabel: Record<string, string> = {
+        critical: '🔴 严重',
+        major: '🟠 主要',
+        minor: '🟡 次要',
+        positive: '🟢 正面',
+      };
+      for (const f of findings) {
+        lines.push(
+          `- **[${severityLabel[f.severity] || f.severity || '—'}] ${f.finding || '—'}**`,
+        );
+        if (f.detail) lines.push(`  ${f.detail}`);
+      }
+    } else {
+      lines.push('（暂无数据）');
+    }
+    lines.push('');
+
+    // 总结
+    lines.push('## 总结');
+    lines.push('');
+    lines.push(a.summary || '（暂无总结）');
+    lines.push('');
+
+    // 页脚
+    lines.push('---');
+    lines.push(
+      `*本报告由 AI 自动生成，分析日期：${meta.analysis_date || '—'}，仅供参考*`,
+    );
+
+    return lines.join('\n');
   }
 
   /**

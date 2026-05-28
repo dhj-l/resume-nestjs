@@ -2,14 +2,15 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Post,
-  Req,
-  UseGuards,
-  Res,
-  Query,
   Get,
-  Logger,
   InternalServerErrorException,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
 } from '@nestjs/common';
 import { type Response } from 'express';
 import { ResumeAiService } from './resume-ai.service';
@@ -22,6 +23,7 @@ import { UndoEditDto } from './dto/undo-edit.dto';
 import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
 import { GetLatestAnalysisDto } from './dto/get-latest-analysis.dto';
 import { GetAnalysisDetailDto } from './dto/get-analysis-detail.dto';
+import { ExportAnalysisDto } from './dto/export-analysis.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -253,6 +255,34 @@ export class ResumeAiController {
         dto.resumeId,
         req.user.userId,
       );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 导出 AI 分析结果为 Markdown 文件
+   */
+  @Get('export-analysis/:id')
+  async exportAnalysis(
+    @Param() params: ExportAnalysisDto,
+    @Req() req: { user: { userId: string } },
+    @Res() res: Response,
+  ) {
+    try {
+      const markdown = await this.resumeAiService.exportAnalysisMd(
+        params.id,
+        req.user.userId,
+      );
+      const filename = encodeURIComponent('简历分析报告.md');
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${filename}"; filename*=UTF-8''${filename}`,
+      );
+      res.send(markdown);
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(error.message, error.stack);
