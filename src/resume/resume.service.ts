@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  OnModuleDestroy,
   Logger,
 } from '@nestjs/common';
 import { UpdateResumeDto } from './dto/update-resume.dto';
@@ -29,9 +30,14 @@ type SortableItem = {
 };
 
 @Injectable()
-export class ResumeService implements OnModuleInit {
+export class ResumeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ResumeService.name);
   private tailwindScript: string;
+
+  /** 复用的浏览器实例（应用级单例），避免每次生成 PDF 都创建新进程 */
+  private browser: any = null;
+  /** 浏览器初始化互斥锁，防止并发请求创建多个浏览器实例 */
+  private browserInitPromise: Promise<any> | null = null;
 
   constructor(
     @InjectModel(Resume.name) private resumeModel: Model<ResumeDocument>,
@@ -59,6 +65,67 @@ export class ResumeService implements OnModuleInit {
     } catch (error) {
       this.logger.error('加载 Tailwind CSS 脚本失败', (error as Error).stack);
       throw new Error('初始化失败：无法加载 Tailwind CSS 脚本');
+    }
+  }
+
+  /**
+   * 获取或创建浏览器实例（应用级单例）
+   *
+   * 复用单个浏览器进程来生成所有 PDF，避免每次请求都创建/
+   * 销毁 Chromium 进程。使用互斥锁防止并发请求创建多个实例。
+   *
+   * 浏览器断开连接时自动重置引用，下次请求会重新创建。
+   */
+  private async getBrowser(): Promise<any> {
+    if (this.browser?.isConnected()) {
+      return this.browser;
+    }
+
+    // 并发控制：已有初始化在跑就直接等结果
+    if (this.browserInitPromise) {
+      return this.browserInitPromise;
+    }
+
+    this.browserInitPromise = (async () => {
+      try {
+        this.logger.log('启动浏览器实例（首次创建或断开后重建）');
+        const newBrowser = await puppeteer.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+
+        // 浏览器异常断开时清空引用，下次调用自动重建
+        newBrowser.on('disconnected', () => {
+          this.logger.warn('浏览器实例断开连接，将在下次请求时重建');
+          this.browser = null;
+        });
+
+        this.browser = newBrowser;
+        return newBrowser;
+      } finally {
+        // 无论成功失败都释放锁，失败后下次调用会重试
+        this.browserInitPromise = null;
+      }
+    })();
+
+    return this.browserInitPromise;
+  }
+
+  /**
+   * 应用关闭时清理浏览器资源
+   *
+   * NestJS 生命周期钩子，在 `app.close()` 或 `SIGTERM` 触发优雅关闭时调用。
+   * 确保没有孤儿 Chromium 子进程残留。
+   */
+  async onModuleDestroy(): Promise<void> {
+    if (this.browser) {
+      this.logger.log('关闭浏览器实例');
+      try {
+        await this.browser.close();
+      } catch (error) {
+        this.logger.error(`关闭浏览器失败: ${(error as Error).message}`);
+      }
+      this.browser = null;
     }
   }
 
@@ -199,15 +266,13 @@ export class ResumeService implements OnModuleInit {
    */
   async downloadResume(downloadResumeDto: DownloadResumeDto): Promise<Buffer> {
     const { html, css } = downloadResumeDto;
-    let browser: any;
+    let page: any;
     try {
       this.logger.log('开始生成 PDF 简历');
-      browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
 
-      const page: any = await browser.newPage();
+      // 复用应用级浏览器单例，避免每次请求创建/销毁进程
+      const browser = await this.getBrowser();
+      page = await browser.newPage();
 
       const content = this.getContent(html, css);
 
@@ -243,8 +308,13 @@ export class ResumeService implements OnModuleInit {
       );
       throw new BadRequestException('生成 PDF 失败，请检查 HTML 和 CSS 格式');
     } finally {
-      if (browser) {
-        await browser.close();
+      // 只关闭页面（轻量），浏览器实例留给后续请求复用
+      if (page) {
+        try {
+          await page.close();
+        } catch {
+          // 页面关闭失败不影响主流程
+        }
       }
     }
   }
