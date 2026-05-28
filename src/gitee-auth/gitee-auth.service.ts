@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import axios from 'axios';
 import { BaseOAuthService } from '../common/oauth/base-oauth.service';
 import type {
@@ -15,6 +15,7 @@ import {
  *
  * 继承 BaseOAuthService，仅实现 Gitee 平台差异化的逻辑。
  */
+@Injectable()
 export class GiteeAuthService extends BaseOAuthService {
   readonly platformName = 'gitee';
 
@@ -129,6 +130,44 @@ export class GiteeAuthService extends BaseOAuthService {
       avatarUrl: giteeUser.avatar_url,
       profileUrl: giteeUser.html_url,
       email: giteeUser.email || undefined,
+      verifiedEmail: giteeUser.email || undefined,
     };
+  }
+
+  /**
+   * POST https://gitee.com/oauth/token
+   * 使用 refresh_token 续期 access_token
+   */
+  async refreshAccessToken(refreshToken: string): Promise<OAuthTokenData> {
+    try {
+      const { data } = await axios.post<GiteeTokenResponse>(
+        'https://gitee.com/oauth/token',
+        {
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: this.config.clientId,
+          client_secret: this.config.clientSecret,
+        },
+        {
+          headers: { Accept: 'application/json' },
+          timeout: 10000,
+        },
+      );
+
+      if (!data.access_token) {
+        throw new BadRequestException('Gitee 令牌刷新失败：返回的令牌为空');
+      }
+
+      return data;
+    } catch (error: unknown) {
+      const axiosError = error as {
+        response?: { data?: unknown };
+        message?: string;
+      };
+      this.logger.error(
+        `Gitee 令牌刷新失败: ${JSON.stringify(axiosError.response?.data || axiosError.message)}`,
+      );
+      throw new BadRequestException('令牌刷新失败，请重新授权');
+    }
   }
 }

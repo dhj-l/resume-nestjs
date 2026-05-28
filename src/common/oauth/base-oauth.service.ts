@@ -97,6 +97,9 @@ export abstract class BaseOAuthService {
     context: Record<string, unknown>,
   ): FindOrCreateOAuthUserParams;
 
+  /** 使用 refresh_token 续期 access_token（平台不支持时抛出 BadRequestException） */
+  abstract refreshAccessToken(refreshToken: string): Promise<OAuthTokenData>;
+
   // ───────────────────── 钩子方法（可选覆盖） ─────────────────────
 
   /**
@@ -226,5 +229,66 @@ export abstract class BaseOAuthService {
       return encryptedToken;
     }
     return decryptToken(encryptedToken, this.encryptionKey);
+  }
+
+  /**
+   * 刷新用户的 OAuth access_token
+   *
+   * 从数据库读取存储的 refresh_token，调用平台刷新接口，更新数据库中的令牌。
+   */
+  async refreshUserToken(userId: string): Promise<{ tokenExpiresAt?: Date }> {
+    const user = await this.userService.findOne(userId);
+    if (!user) {
+      throw new BadRequestException('用户不存在');
+    }
+
+    const provider = (user as any).oauthProviders?.find(
+      (p: any) => p.platform === this.platformName,
+    );
+    if (!provider) {
+      throw new BadRequestException(`未绑定 ${this.platformName} 账号`);
+    }
+
+    if (!provider.refreshToken) {
+      throw new BadRequestException(
+        `${this.platformName} 不支持令牌刷新，请重新授权`,
+      );
+    }
+
+    // 解密存储的 refresh_token
+    const decryptedRefreshToken = this.encryptionKey
+      ? decryptToken(provider.refreshToken, this.encryptionKey)
+      : provider.refreshToken;
+
+    // 调用平台特定的刷新逻辑（子类实现）
+    const tokenData = await this.refreshAccessToken(decryptedRefreshToken);
+
+    // 加密新 token 后存储
+    const storedAccessToken = this.encryptionKey
+      ? encryptToken(tokenData.access_token, this.encryptionKey)
+      : tokenData.access_token;
+
+    const storedRefreshToken = tokenData.refresh_token
+      ? this.encryptionKey
+        ? encryptToken(tokenData.refresh_token, this.encryptionKey)
+        : tokenData.refresh_token
+      : provider.refreshToken;
+
+    const tokenExpiresAt = tokenData.expires_in
+      ? new Date(Date.now() + tokenData.expires_in * 1000)
+      : provider.tokenExpiresAt;
+
+    // 原子更新数据库
+    await this.userService.updateOAuthTokens(
+      userId,
+      this.platformName,
+      provider.platformUserId,
+      storedAccessToken,
+      storedRefreshToken,
+      tokenExpiresAt,
+    );
+
+    this.logger.log(`${this.platformName} 令牌刷新成功`);
+    return { tokenExpiresAt };
   }
 }

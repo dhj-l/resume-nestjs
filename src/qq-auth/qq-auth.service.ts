@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import axios from 'axios';
 import { BaseOAuthService } from '../common/oauth/base-oauth.service';
 import type {
@@ -22,6 +22,7 @@ import {
  *   - 用户信息接口需要 oauth_consumer_key 参数
  *   - 不返回邮箱地址
  */
+@Injectable()
 export class QQAuthService extends BaseOAuthService {
   readonly platformName = 'qq';
 
@@ -166,6 +167,47 @@ export class QQAuthService extends BaseOAuthService {
       profileUrl: undefined,
       email: undefined,
     };
+  }
+
+  /**
+   * POST https://graph.qq.com/oauth2.0/token
+   * 使用 refresh_token 续期 access_token
+   */
+  async refreshAccessToken(refreshToken: string): Promise<OAuthTokenData> {
+    try {
+      const { data } = await axios.post<QQTokenResponse>(
+        'https://graph.qq.com/oauth2.0/token',
+        new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: this.config.clientId,
+          client_secret: this.config.clientSecret,
+          fmt: 'json',
+        }).toString(),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          timeout: 10000,
+        },
+      );
+
+      if (!data.access_token) {
+        throw new BadRequestException('QQ 令牌刷新失败：返回的令牌为空');
+      }
+
+      return data;
+    } catch (error: unknown) {
+      const axiosError = error as {
+        response?: { data?: unknown };
+        message?: string;
+      };
+      this.logger.error(
+        `QQ 令牌刷新失败: ${JSON.stringify(axiosError.response?.data || axiosError.message)}`,
+      );
+      throw new BadRequestException('令牌刷新失败，请重新授权');
+    }
   }
 
   // ───────────────────── 私有方法 ─────────────────────

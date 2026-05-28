@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import axios from 'axios';
 import { BaseOAuthService } from '../common/oauth/base-oauth.service';
 import type {
@@ -21,6 +21,7 @@ import {
  *   - API 要求 User-Agent header
  *   - 通过 /user/emails API 获取已验证邮箱用于安全的账户匹配
  */
+@Injectable()
 export class GitHubAuthService extends BaseOAuthService {
   readonly platformName = 'github';
 
@@ -137,6 +138,15 @@ export class GitHubAuthService extends BaseOAuthService {
       email: githubUser.email || undefined,
       verifiedEmail: context.verifiedEmail as string | undefined,
     };
+  }
+
+  /**
+   * GitHub tokens 默认不过期且不支持 refresh_token
+   */
+  async refreshAccessToken(_refreshToken: string): Promise<OAuthTokenData> {
+    throw new BadRequestException(
+      'GitHub 令牌默认不过期，不支持刷新。如需更新令牌，请重新授权。',
+    );
   }
 
   // ───────────────────── 私有方法 ─────────────────────

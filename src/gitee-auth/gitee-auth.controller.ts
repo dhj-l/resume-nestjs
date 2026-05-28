@@ -1,9 +1,22 @@
-import { Controller, Get, Query, Req, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { GiteeAuthService } from './gitee-auth.service';
 import { OAuthCallbackDto } from '../common/dto/oauth-callback.dto';
 import { BaseOAuthController } from '../common/oauth/base-oauth.controller';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { Request, Response } from 'express';
+
+type RequestWithUser = Request & {
+  user: { userId: string; username: string; email: string };
+};
 
 /**
  * Gitee OAuth 认证控制器
@@ -39,5 +52,15 @@ export class GiteeAuthController extends BaseOAuthController<GiteeAuthService> {
     @Res() res: Response,
   ): Promise<void> {
     return this.handleCallback(dto, res);
+  }
+
+  /**
+   * 刷新 Gitee OAuth 令牌
+   * POST /api/v1/auth/gitee/refresh
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('refresh')
+  async refresh(@Req() req: RequestWithUser) {
+    return this.handleRefreshToken(req.user.userId);
   }
 }

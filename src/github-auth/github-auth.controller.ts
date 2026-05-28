@@ -1,9 +1,22 @@
-import { Controller, Get, Query, Req, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { GitHubAuthService } from './github-auth.service';
 import { OAuthCallbackDto } from '../common/dto/oauth-callback.dto';
 import { BaseOAuthController } from '../common/oauth/base-oauth.controller';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { Request, Response } from 'express';
+
+type RequestWithUser = Request & {
+  user: { userId: string; username: string; email: string };
+};
 
 /**
  * GitHub OAuth 认证控制器
@@ -39,5 +52,15 @@ export class GitHubAuthController extends BaseOAuthController<GitHubAuthService>
     @Res() res: Response,
   ): Promise<void> {
     return this.handleCallback(dto, res);
+  }
+
+  /**
+   * 刷新 GitHub OAuth 令牌（GitHub token 默认不过期，返回提示信息）
+   * POST /api/v1/auth/github/refresh
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('refresh')
+  async refresh(@Req() req: RequestWithUser) {
+    return this.handleRefreshToken(req.user.userId);
   }
 }

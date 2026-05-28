@@ -161,10 +161,25 @@ export class UserService {
     }
   }
 
-  async logout(token: string) {
+  async logout(token: string, userId?: string) {
     try {
       this.logger.log('用户请求退出登录');
       await this.tokenBlacklistService.addToBlacklist(token);
+
+      // 清除存储的 OAuth 令牌，防止令牌泄露后被滥用
+      if (userId) {
+        await this.userModel.updateOne(
+          { _id: userId },
+          {
+            $set: {
+              'oauthProviders.$[].accessToken': '',
+              'oauthProviders.$[].refreshToken': '',
+            },
+          },
+        );
+        this.logger.log('已清除用户 OAuth 令牌');
+      }
+
       this.logger.log('用户退出登录成功');
       return { message: '退出登录成功' };
     } catch (error) {
@@ -461,81 +476,70 @@ export class UserService {
       `OAuth 查找/创建用户: platform=${platform}, platformUserId=${platformUserId}`,
     );
 
-    // ── 策略 1：同平台同 ID 已存在 → 更新令牌 ──
-    const existingByPlatform = await this.userModel
-      .findOne({
-        'oauthProviders.platform': platform,
-        'oauthProviders.platformUserId': platformUserId,
-      })
+    const providerData = {
+      platform,
+      platformUserId,
+      accessToken,
+      refreshToken: refreshToken ?? undefined,
+      tokenExpiresAt: tokenExpiresAt ?? undefined,
+      nickname: nickname ?? undefined,
+      avatarUrl: avatarUrl ?? undefined,
+      profileUrl: profileUrl ?? undefined,
+      email: email ?? undefined,
+    };
+
+    // 构建原子查找条件：同平台同 ID 或已验证邮箱
+    const orConditions: Record<string, unknown>[] = [
+      {
+        oauthProviders: { $elemMatch: { platform, platformUserId } },
+      },
+    ];
+    if (verifiedEmail) {
+      orConditions.push({ email: verifiedEmail });
+    }
+
+    // ── Phase 1: 原子查找+更新（策略 1 + 2）──
+    const providerUpdate: Record<string, unknown> = {
+      'oauthProviders.$[elem].accessToken': accessToken,
+    };
+    if (refreshToken !== undefined)
+      providerUpdate['oauthProviders.$[elem].refreshToken'] = refreshToken;
+    if (tokenExpiresAt !== undefined)
+      providerUpdate['oauthProviders.$[elem].tokenExpiresAt'] = tokenExpiresAt;
+    if (nickname !== undefined)
+      providerUpdate['oauthProviders.$[elem].nickname'] = nickname;
+    if (avatarUrl !== undefined)
+      providerUpdate['oauthProviders.$[elem].avatarUrl'] = avatarUrl;
+    if (profileUrl !== undefined)
+      providerUpdate['oauthProviders.$[elem].profileUrl'] = profileUrl;
+    if (email !== undefined)
+      providerUpdate['oauthProviders.$[elem].email'] = email;
+
+    const existing = await this.userModel
+      .findOneAndUpdate(
+        { $or: orConditions },
+        {
+          $addToSet: { oauthProviders: providerData },
+          $set: providerUpdate,
+        },
+        {
+          new: true,
+          arrayFilters: [
+            {
+              'elem.platform': platform,
+              'elem.platformUserId': platformUserId,
+            },
+          ],
+        },
+      )
       .exec();
 
-    if (existingByPlatform) {
-      this.logger.log(`已有 OAuth 绑定用户: ${existingByPlatform.email}`);
-
-      // 更新对应平台的令牌信息
-      const provider = existingByPlatform.oauthProviders.find(
-        (p) => p.platform === platform && p.platformUserId === platformUserId,
-      );
-      if (provider) {
-        provider.accessToken = accessToken;
-        provider.refreshToken = refreshToken ?? undefined;
-        provider.tokenExpiresAt = tokenExpiresAt ?? undefined;
-        // 更新可能变更的个人资料
-        if (nickname) provider.nickname = nickname;
-        if (avatarUrl) provider.avatarUrl = avatarUrl;
-        if (profileUrl) provider.profileUrl = profileUrl;
-        if (email) provider.email = email;
-      }
-
-      await existingByPlatform.save();
-      return { user: existingByPlatform, isNew: false };
+    if (existing) {
+      this.logger.log(`已有 OAuth 绑定用户: ${existing.email}`);
+      return { user: existing, isNew: false };
     }
 
-    // ── 策略 2：邮箱匹配 → 绑定到已有账户 ──
-    // 仅使用经 OAuth 平台验证过的邮箱进行匹配，防止账户劫持
-    // （攻击者可在 GitHub 设置任意邮箱，但无法通过平台验证）
-    if (verifiedEmail) {
-      const existingByEmail = await this.userModel
-        .findOne({ email: verifiedEmail })
-        .exec();
-
-      if (existingByEmail) {
-        this.logger.log(
-          `邮箱匹配已有用户: ${verifiedEmail}，绑定 ${platform} 登录`,
-        );
-
-        // 检查是否已绑定同一平台（理论上不会到这里，因为策略1已覆盖）
-        const alreadyBound = existingByEmail.oauthProviders.some(
-          (p) => p.platform === platform,
-        );
-        if (alreadyBound) {
-          this.logger.warn(
-            `用户 ${verifiedEmail} 已绑定 ${platform}，跳过重复绑定`,
-          );
-          return { user: existingByEmail, isNew: false };
-        }
-
-        // 追加密平台绑定
-        existingByEmail.oauthProviders.push({
-          platform,
-          platformUserId,
-          accessToken,
-          refreshToken: refreshToken ?? undefined,
-          tokenExpiresAt: tokenExpiresAt ?? undefined,
-          nickname: nickname ?? undefined,
-          avatarUrl: avatarUrl ?? undefined,
-          profileUrl: profileUrl ?? undefined,
-          email: email ?? undefined,
-        } as any);
-
-        await existingByEmail.save();
-        return { user: existingByEmail, isNew: false };
-      }
-    } else if (email) {
-      this.logger.warn(`OAuth 返回的邮箱 ${email} 未经平台验证，跳过邮箱匹配`);
-    }
-
-    // ── 策略 3：全新用户 → 创建 ──
+    // ── Phase 2: 创建新用户（策略 3）──
     this.logger.log(`创建新 OAuth 用户: platform=${platform}`);
 
     // 生成唯一用户名
@@ -548,32 +552,120 @@ export class UserService {
     // 邮箱处理：OAuth 可能不返回邮箱
     const userEmail = email || `${platform}_${platformUserId}@oauth.local`;
 
-    const newUser = await this.userModel.create({
-      username,
-      email: userEmail,
-      // OAuth 用户不设置密码
-      password: undefined,
-      loginAttempts: 0,
-      createdVia: platform,
-      oauthProviders: [
-        {
-          platform,
-          platformUserId,
-          accessToken,
-          refreshToken: refreshToken ?? undefined,
-          tokenExpiresAt: tokenExpiresAt ?? undefined,
-          nickname: nickname ?? undefined,
-          avatarUrl: avatarUrl ?? undefined,
-          profileUrl: profileUrl ?? undefined,
-          email: email ?? undefined,
-        },
-      ],
-    });
+    try {
+      const newUser = await this.userModel.create({
+        username,
+        email: userEmail,
+        password: undefined,
+        loginAttempts: 0,
+        createdVia: platform,
+        oauthProviders: [providerData],
+      });
 
-    this.logger.log(
-      `OAuth 用户创建成功: ${newUser.email} (username: ${username})`,
+      this.logger.log(
+        `OAuth 用户创建成功: ${newUser.email} (username: ${username})`,
+      );
+      return { user: newUser, isNew: true };
+    } catch (err: any) {
+      // Duplicate key (11000) 说明另一并发请求已创建用户，重试 Phase 1
+      if (err.code === 11000) {
+        this.logger.warn(
+          `OAuth 用户创建遇到竞态 (duplicate key), 重试查找: platform=${platform}`,
+        );
+
+        // 先尝试按 OAuth 身份/邮箱找到已有用户
+        const retryProviderUpdate: Record<string, unknown> = {
+          'oauthProviders.$[elem].accessToken': accessToken,
+        };
+        if (refreshToken !== undefined)
+          retryProviderUpdate['oauthProviders.$[elem].refreshToken'] =
+            refreshToken;
+        if (tokenExpiresAt !== undefined)
+          retryProviderUpdate['oauthProviders.$[elem].tokenExpiresAt'] =
+            tokenExpiresAt;
+
+        const user = await this.userModel
+          .findOneAndUpdate(
+            { $or: orConditions },
+            {
+              $addToSet: { oauthProviders: providerData },
+              $set: retryProviderUpdate,
+            },
+            {
+              new: true,
+              arrayFilters: [
+                {
+                  'elem.platform': platform,
+                  'elem.platformUserId': platformUserId,
+                },
+              ],
+            },
+          )
+          .exec();
+
+        if (user) {
+          this.logger.log(`竞态恢复成功: ${user.email}`);
+          return { user, isNew: false };
+        }
+
+        // Phase 1 重试未找到用户 → 可能是 username 唯一索引冲突
+        // 重新生成 username 并重试 create
+        for (let i = 0; i < 3; i++) {
+          const newUsername = await this.generateUniqueUsername(baseUsername);
+          try {
+            const newUser = await this.userModel.create({
+              username: newUsername,
+              email: userEmail,
+              password: undefined,
+              loginAttempts: 0,
+              createdVia: platform,
+              oauthProviders: [providerData],
+            });
+
+            this.logger.log(
+              `OAuth 用户创建成功 (username 重试): ${newUser.email} (username: ${newUsername})`,
+            );
+            return { user: newUser, isNew: true };
+          } catch (retryErr: any) {
+            if (retryErr.code !== 11000) throw retryErr;
+            this.logger.warn(`username 重试 ${i + 1}/3 冲突: ${newUsername}`);
+          }
+        }
+
+        this.logger.error(
+          `OAuth 用户创建失败: username 重试 3 次均冲突 - platform=${platform}`,
+        );
+        throw new BadRequestException('用户创建失败，请稍后重试');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * 原子更新指定 OAuth 提供商的令牌
+   * 用于令牌刷新等场景，避免 read-modify-write 竞态
+   */
+  async updateOAuthTokens(
+    userId: string,
+    platform: string,
+    platformUserId: string,
+    accessToken: string,
+    refreshToken: string,
+    tokenExpiresAt?: Date,
+  ): Promise<void> {
+    await this.userModel.updateOne(
+      {
+        _id: userId,
+        oauthProviders: { $elemMatch: { platform, platformUserId } },
+      },
+      {
+        $set: {
+          'oauthProviders.$.accessToken': accessToken,
+          'oauthProviders.$.refreshToken': refreshToken,
+          'oauthProviders.$.tokenExpiresAt': tokenExpiresAt,
+        },
+      },
     );
-    return { user: newUser, isNew: true };
   }
 
   /**

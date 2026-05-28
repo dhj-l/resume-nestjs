@@ -64,4 +64,14 @@ export abstract class BaseOAuthController<T extends BaseOAuthService> {
       );
     }
   }
+
+  /**
+   * 处理令牌刷新请求
+   */
+  protected async handleRefreshToken(
+    userId: string,
+  ): Promise<{ tokenExpiresAt?: Date }> {
+    this.logger.log(`收到 ${this.platformDisplayName} 令牌刷新请求`);
+    return this.authService.refreshUserToken(userId);
+  }
 }
