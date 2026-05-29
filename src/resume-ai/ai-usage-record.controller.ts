@@ -32,17 +32,6 @@ export class AiUsageRecordController {
     }
   }
 
-  @Get(':id')
-  async findOne(@Param('id') id: string) {
-    try {
-      return await this.aiUsageRecordService.findById(id);
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-      this.logger.error(error.message, error.stack);
-      throw new InternalServerErrorException('服务器内部错误');
-    }
-  }
-
   /**
    * 获取全局 AI 用量统计数据
    * GET /api/v1/admin/ai-usage-records/stats
@@ -52,6 +41,17 @@ export class AiUsageRecordController {
   async getStats() {
     try {
       return await this.aiUsageRecordService.getStats();
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  @Get(':id')
+  async findOne(@Param('id') id: string) {
+    try {
+      return await this.aiUsageRecordService.findById(id);
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(error.message, error.stack);

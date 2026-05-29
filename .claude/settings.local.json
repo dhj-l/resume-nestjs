@@ -20,7 +20,8 @@
       "WebSearch",
       "Bash(pnpm lint *)",
       "Bash(pnpm format *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(pnpm exec *)"
     ]
   }
 }
