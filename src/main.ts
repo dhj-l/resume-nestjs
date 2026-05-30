@@ -49,7 +49,7 @@ async function bootstrap() {
     .get<string>('CORS_ORIGINS')
     ?.split(',')
     .map((s) => s.trim())
-    .filter(Boolean) ?? ['http://localhost:5173'];
+    .filter(Boolean) ?? ['http://localhost:5173', 'http://localhost:5174'];
 
   // 安全 HTTP 头
   app.use(

@@ -9,7 +9,7 @@ export class AiService {
 
   createDefaultDeepSeek(props: DeepSeekProps) {
     const {
-      model = 'deepseek-chat',
+      model = 'deepseek-v4-flash',
       apiKey,
       maxTokens = 4000,
       temperature = 0.5,

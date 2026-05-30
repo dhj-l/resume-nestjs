@@ -286,11 +286,39 @@ export interface ValidationResult {
   details: ValidationDetails;
 }
 
+/**
+ * 归一化 CJK 文本：移除中文字符之间的空白字符（空格、Tab、全角空格等）
+ *
+ * 很多简历使用空格/Tab 对齐排版（如 "电 \t话"、"邮  箱"），
+ * 导致关键词精确匹配失败。此函数将 CJK 字符间的空白移除，
+ * 使后续的 includes() 匹配能正常工作。
+ *
+ * @example
+ * normalizeCjkText('电 \t话：18371332606')  // → '电话：18371332606'
+ * normalizeCjkText('学  历  本科')          // → '学历  本科' (第二个空格不在 CJK 间，保留)
+ */
+export function normalizeCjkText(text: string): string {
+  // 匹配 CJK 字符 + 空白 + CJK 字符，移除中间的空白
+  // 需要循环替换，因为 "电 \t话 \t1837" 中 "话 \t1" 不会被匹配（1 不是 CJK）
+  let result = text;
+  let prev = '';
+  while (prev !== result) {
+    prev = result;
+    result = result.replace(
+      /([\u4e00-\u9fff\u3400-\u4dbf])\s+([\u4e00-\u9fff\u3400-\u4dbf])/g,
+      '$1$2',
+    );
+  }
+  return result;
+}
+
 export function matchResumeKeywordGroup(
   text: string,
   group: (typeof RESUME_KEYWORD_GROUPS)[0],
 ): boolean {
-  const lowerText = text.toLowerCase();
+  // 先归一化 CJK 文本，移除中文字符间的排版空白，避免 "电 \t话" 无法匹配 "电话"
+  const normalizedText = normalizeCjkText(text);
+  const lowerText = normalizedText.toLowerCase();
 
   for (const keyword of group.keywords) {
     if (lowerText.includes(keyword.toLowerCase())) {

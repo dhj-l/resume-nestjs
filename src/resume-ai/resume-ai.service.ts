@@ -40,6 +40,7 @@ import {
   ValidationDetails,
   ValidationResult,
   matchResumeKeywordGroup,
+  normalizeCjkText,
   countDatePatterns,
   hasContactInfo,
   hasNonResumeContent,
@@ -643,6 +644,10 @@ export class ResumeAiService {
     const messages = RESUME_VALIDATION_MESSAGES[language];
     let score = 0;
 
+    // 归一化 CJK 文本，移除中文字符间的排版空白（如 "电 \t话" → "电话"）
+    // 解决简历中因空格/Tab 对齐导致的关键词匹配失败
+    const normalizedContent = normalizeCjkText(resumeContent);
+
     const details: ValidationDetails = {
       hasPersonalInfo: false,
       hasEducation: false,
@@ -653,13 +658,13 @@ export class ResumeAiService {
       hasTimeFormat: false,
       hasContactInfo: false,
       matchedKeywordGroups: [],
-      contentLength: resumeContent.length,
+      contentLength: normalizedContent.length,
       paragraphCount: 0,
       lineBreakCount: 0,
       dateCount: 0,
     };
 
-    const length = resumeContent.length;
+    const length = normalizedContent.length;
 
     if (length > RESUME_MAX_LENGTH) {
       errors.push(messages.tooLong);
@@ -678,10 +683,10 @@ export class ResumeAiService {
       score += 15;
     }
 
-    const paragraphs = resumeContent
+    const paragraphs = normalizedContent
       .split(/\n\s*\n/)
       .filter((p) => p.trim().length > 0);
-    const lineBreaks = (resumeContent.match(/\n/g) || []).length;
+    const lineBreaks = (normalizedContent.match(/\n/g) || []).length;
 
     details.paragraphCount = paragraphs.length;
     details.lineBreakCount = lineBreaks;
@@ -695,7 +700,7 @@ export class ResumeAiService {
       score += 15;
     }
 
-    const dateCount = countDatePatterns(resumeContent);
+    const dateCount = countDatePatterns(normalizedContent);
     details.dateCount = dateCount;
 
     if (dateCount >= RESUME_MIN_DATE_COUNT) {
@@ -705,12 +710,12 @@ export class ResumeAiService {
       errors.push(messages.missingTimeFormat);
     }
 
-    details.hasContactInfo = hasContactInfo(resumeContent);
+    details.hasContactInfo = hasContactInfo(normalizedContent);
 
     let matchedGroups = 0;
 
     for (const group of RESUME_KEYWORD_GROUPS) {
-      if (matchResumeKeywordGroup(resumeContent, group)) {
+      if (matchResumeKeywordGroup(normalizedContent, group)) {
         matchedGroups++;
         details.matchedKeywordGroups.push(group.name);
 
@@ -762,7 +767,7 @@ export class ResumeAiService {
       }
     }
 
-    if (hasNonResumeContent(resumeContent)) {
+    if (hasNonResumeContent(normalizedContent)) {
       errors.push(messages.nonResumeContent);
       score = Math.max(0, score - 30);
     }
@@ -777,7 +782,7 @@ export class ResumeAiService {
 
     const isValid =
       score >= RESUME_PASSING_SCORE &&
-      !hasNonResumeContent(resumeContent) &&
+      !hasNonResumeContent(normalizedContent) &&
       hasAllRequiredFields;
 
     const reason = isValid
