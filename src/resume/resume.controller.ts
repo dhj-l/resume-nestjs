@@ -11,6 +11,7 @@ import {
   UseGuards,
   Query,
 } from '@nestjs/common';
+import { ParseObjectIdPipe } from '@nestjs/mongoose';
 import type { Response } from 'express';
 import type { Request } from 'express';
 import { ResumeService } from './resume.service';
@@ -94,7 +95,7 @@ export class ResumeController {
    * 需要登录认证，只允许用户查看自己的简历
    */
   @Get(':id')
-  findOne(@Param('id') id: string, @Req() req: RequestWithUser) {
+  findOne(@Param('id', ParseObjectIdPipe) id: string, @Req() req: RequestWithUser) {
     const { userId } = req.user;
     return this.resumeService.findOne(id, userId);
   }
@@ -106,7 +107,7 @@ export class ResumeController {
    */
   @Post(':id/copy')
   copy(
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() body: CopyResumeDto,
     @Req() req: RequestWithUser,
   ) {
@@ -120,7 +121,7 @@ export class ResumeController {
    */
   @Patch(':id')
   update(
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() updateResumeDto: UpdateResumeDto,
     @Req() req: RequestWithUser,
   ) {
@@ -133,7 +134,7 @@ export class ResumeController {
    * 需要登录认证，只允许用户删除自己的简历
    */
   @Delete(':id')
-  remove(@Param('id') id: string, @Req() req: RequestWithUser) {
+  remove(@Param('id', ParseObjectIdPipe) id: string, @Req() req: RequestWithUser) {
     const { userId } = req.user;
     return this.resumeService.remove(id, userId);
   }

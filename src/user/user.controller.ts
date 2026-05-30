@@ -47,7 +47,7 @@ export class UserController {
    * @param loginDto 登录 DTO
    * @returns 包含 JWT token 和用户信息的对象
    */
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('login')
   async login(@Body() loginDto: LoginDto) {
     return this.userService.login(loginDto);
