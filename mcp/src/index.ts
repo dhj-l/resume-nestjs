@@ -51,7 +51,7 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.warn('mcp已启动');
+  console.error('mcp已启动');
 }
 main().catch(() => {
   console.error('mcp启动失败');

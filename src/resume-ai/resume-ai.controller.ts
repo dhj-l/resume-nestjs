@@ -2,13 +2,15 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Post,
-  Req,
-  UseGuards,
-  Headers,
-  Res,
-  Query,
   Get,
+  InternalServerErrorException,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
 } from '@nestjs/common';
 import { type Response } from 'express';
 import { ResumeAiService } from './resume-ai.service';
@@ -16,10 +18,18 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 import { SseMessage } from './types/sse.types';
 import { GetResumeRecordsDto } from 'src/resume-ai/dto/get-resume-record.dto';
+import { PolishResumeDto } from './dto/polish-resume.dto';
+import { UndoEditDto } from './dto/undo-edit.dto';
+import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
+import { GetLatestAnalysisDto } from './dto/get-latest-analysis.dto';
+import { GetAnalysisDetailDto } from './dto/get-analysis-detail.dto';
+import { ExportAnalysisDto } from './dto/export-analysis.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
 export class ResumeAiController {
+  private readonly logger = new Logger(ResumeAiController.name);
+
   constructor(private readonly resumeAiService: ResumeAiService) {}
   @Post('generate')
   async generateResume(
@@ -30,7 +40,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return this.resumeAiService.generateResume(createAiResuemDto, userId);
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
   /**
@@ -42,7 +54,9 @@ export class ResumeAiController {
       const { userId } = req.user;
       return this.resumeAiService.parseResume(parserResumeDto, userId);
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
   /**
@@ -79,7 +93,7 @@ export class ResumeAiController {
           res.write(sseData);
         },
         error: (error: Error) => {
-          console.error('SSE错误:', error);
+          this.logger.error('SSE错误', error.stack);
           const errorMessage: SseMessage = {
             type: 'error',
             moduleName: 'system',
@@ -104,12 +118,12 @@ export class ResumeAiController {
 
       // 处理连接错误
       req.on('error', (error: Error) => {
-        console.error('连接错误:', error);
+        this.logger.error('连接错误', error.stack);
         subscription.unsubscribe();
         res.end();
       });
     } catch (error: any) {
-      console.error('SSE初始化错误:', error);
+      this.logger.error('SSE初始化错误', error.stack);
       throw new BadRequestException(error.message);
     }
   }
@@ -126,7 +140,201 @@ export class ResumeAiController {
       const { userId } = req.user;
       return await this.resumeAiService.getResumeRecords(userId, query);
     } catch (error: any) {
-      throw new BadRequestException(error.message);
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * AI润色简历模块内容
+   */
+  @Post('polish')
+  async polishContent(@Body() polishResumeDto: PolishResumeDto, @Req() req) {
+    try {
+      const { userId } = req.user;
+      return this.resumeAiService.polishContent(polishResumeDto, userId);
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 撤销AI润色操作
+   */
+  @Post('undo')
+  async undoEdit(@Body() undoEditDto: UndoEditDto, @Req() req) {
+    try {
+      const { userId } = req.user;
+      return this.resumeAiService.undoEdit(undoEditDto, userId);
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * AI分析简历与岗位JD的匹配度
+   */
+  @Post('analyze')
+  async analyzeResume(@Body() analyzeResumeDto: AnalyzeResumeDto, @Req() req) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.analyzeResume(analyzeResumeDto, userId);
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取简历分析记录列表
+   */
+  @Get('analysis-records')
+  async getAnalysisRecords(
+    @Req() req: { user: { userId: string } },
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    try {
+      const { userId } = req.user;
+      const parsedPage = page ? parseInt(page, 10) : 1;
+      const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
+      const validPage =
+        Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPageSize =
+        Number.isNaN(parsedPageSize) || parsedPageSize < 1
+          ? 10
+          : Math.min(parsedPageSize, 100);
+      return await this.resumeAiService.getAnalysisRecords(
+        userId,
+        validPage,
+        validPageSize,
+      );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+  /**
+   * 获取简历分析详情
+   */
+  @Get('analysis-detail')
+  async getAnalysisDetail(
+    @Query() dto: GetAnalysisDetailDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const data = await this.resumeAiService.getAnalysisDetailService(
+        dto.id,
+        req.user.userId,
+      );
+      return data;
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 查询简历最近一次的AI分析
+   */
+  @Get('latest-analysis')
+  async getLatestAnalysis(
+    @Query() dto: GetLatestAnalysisDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.resumeAiService.getLatestAnalysisByResumeId(
+        dto.resumeId,
+        req.user.userId,
+      );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 导出 AI 分析结果为 Markdown 文件
+   */
+  @Get('export-analysis/:id')
+  async exportAnalysis(
+    @Param() params: ExportAnalysisDto,
+    @Req() req: { user: { userId: string } },
+    @Res() res: Response,
+  ) {
+    try {
+      const markdown = await this.resumeAiService.exportAnalysisMd(
+        params.id,
+        req.user.userId,
+      );
+      const filename = encodeURIComponent('简历分析报告.md');
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${filename}"; filename*=UTF-8''${filename}`,
+      );
+      res.send(markdown);
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取AI使用记录列表（分页）
+   */
+  @Get('usage-records')
+  async getUsageRecords(
+    @Req() req: { user: { userId: string } },
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('aiFunction') aiFunction?: string,
+  ) {
+    try {
+      const { userId } = req.user;
+      const parsedPage = page ? parseInt(page, 10) : 1;
+      const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
+      const validPage =
+        Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPageSize =
+        Number.isNaN(parsedPageSize) || parsedPageSize < 1
+          ? 10
+          : Math.min(parsedPageSize, 100);
+      return await this.resumeAiService.getUsageRecords(
+        userId,
+        validPage,
+        validPageSize,
+        aiFunction,
+      );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取AI使用统计
+   */
+  @Get('usage-stats')
+  async getUsageStats(@Req() req: { user: { userId: string } }) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.getUsageStats(userId);
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
     }
   }
 }

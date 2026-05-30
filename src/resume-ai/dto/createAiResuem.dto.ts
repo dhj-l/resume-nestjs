@@ -1,10 +1,4 @@
-import {
-  IsEnum,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  ValidateIf,
-} from 'class-validator';
+import { IsEnum, IsNotEmpty, IsString, ValidateIf } from 'class-validator';
 import { DetailInfo, ResumeAiTypeEnum } from '../entities/resume-ai.entity';
 
 export class CreateAiResuemDto {

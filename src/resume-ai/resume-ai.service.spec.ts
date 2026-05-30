@@ -293,6 +293,50 @@ describe('ResumeAiService - validateResumeContent', () => {
       expect(result.details.hasWorkExperience).toBe(false);
       expect(result.details.hasSkills).toBe(false);
     });
+
+    it('应该正确处理被空格/Tab分割的中文标签', () => {
+      // 模拟用户上传的简历：标签被空格和Tab拆分（常见于PDF提取或排版对齐）
+      const resumeWithSpacedLabels = `
+邓宏俊
+求职意向：前端开发实习生 | 一周内到岗
+年 \t龄 \t21 岁 \t性 \t别 \t男
+电 \t话 \t18371332606 \t邮 \t箱 \t3134504258@qq.com
+学 \t历 \t黄冈师范学院(本科)
+毕业时间 \t27届 \t专 \t业 \t网络工程
+自我评价
+具有两段C端业务公司的实习经历，参与过电商+AI Agent相关的业务开发工作
+实习经历
+2025-05 ~ 2025-09 \t北京京控信息技术有限公司 \t前端开发工程师
+      `;
+
+      const result = service['validateResumeContent'](
+        resumeWithSpacedLabels,
+      );
+
+      expect(result.isValid).toBe(true);
+      expect(result.details.hasPersonalInfo).toBe(true);
+      expect(result.details.hasEducation).toBe(true);
+      expect(result.details.hasContactInfo).toBe(true);
+      expect(result.details.hasWorkExperience).toBe(true);
+      expect(result.details.hasSelfEvaluation).toBe(true);
+    });
+
+    it('应该正确处理全角空格分隔的中文标签', () => {
+      const resumeWithFullWidthSpaces = `
+姓名：张三
+电　话：13800138000
+学　历：北京大学
+专　业：计算机科学
+      `;
+
+      const result = service['validateResumeContent'](
+        resumeWithFullWidthSpaces,
+      );
+
+      // 全角空格 "电　话" 中 "电" 和 "话" 之间是 U+3000，应被归一化
+      expect(result.details.hasPersonalInfo).toBe(true);
+      expect(result.details.hasEducation).toBe(true);
+    });
   });
 
   describe('评分系统测试', () => {

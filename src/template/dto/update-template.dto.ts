@@ -3,7 +3,7 @@ import {
   IsOptional,
   MinLength,
   MaxLength,
-  IsUrl,
+  Matches,
 } from 'class-validator';
 
 export class UpdateTemplateDto {
@@ -21,7 +21,10 @@ export class UpdateTemplateDto {
    */
   @IsString({ message: '预览图URL必须是字符串' })
   @IsOptional()
-  @IsUrl({}, { message: '预览图URL格式不正确' })
+  @Matches(/^https?:\/\/.+|^\/[\w\-./]+$/, {
+    message:
+      '预览图URL格式不正确，需要以http(s)://开头的完整URL或以/开头的相对路径',
+  })
   @MaxLength(500, { message: '预览图URL长度不能超过500位' })
   previewImage?: string;
 

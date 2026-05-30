@@ -3,6 +3,8 @@ import * as mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
 import { getHeader } from 'pdf-parse/node';
 import axios from 'axios';
+import { statSync } from 'fs';
+import { extname } from 'path';
 /**
  * 文档解析服务
  * 支持从 URL 下载并解析 PDF、DOCX 等格式的简历文件
@@ -14,21 +16,26 @@ export class DocumentParserService {
   private readonly maxFileSize = 10 * 1024 * 1024; // 10MB
   constructor() {}
   /**
-   * 从url下载解析简历
+   * 从文件路径或 URL 解析简历
    */
-  async parserDocument(url: string) {
-    if (!url) {
-      throw new Error('url不能为空');
+  async parserDocument(filePathOrUrl: string) {
+    if (!filePathOrUrl) {
+      throw new Error('文件路径或URL不能为空');
     }
-    //验证url和文件类型是否正确
-    const type = await this.validateUrl(url);
+    // 检测是本地文件还是远程 URL，分别走不同验证逻辑
+    const isUrl =
+      filePathOrUrl.startsWith('http://') ||
+      filePathOrUrl.startsWith('https://');
+    const type = isUrl
+      ? await this.validateUrl(filePathOrUrl)
+      : this.validateLocalFile(filePathOrUrl);
     let text = '';
     //判断对应的类型来决定解析方式
     if (type === 'pdf') {
       //解析pdf文件
-      text = await this.parsePdf(url);
+      text = await this.parsePdf(filePathOrUrl);
     } else {
-      text = await this.parseDoc(url);
+      text = await this.parseDoc(filePathOrUrl);
     }
     //清除多余的空白，特殊字符
     text = this.clearText(text);
@@ -40,7 +47,30 @@ export class DocumentParserService {
     return text;
   }
   /**
-   * 验证url和文件类型是否正确
+   * 验证本地文件（扩展名和大小）
+   */
+  private validateLocalFile(filePath: string): string {
+    const ext = extname(filePath).replace('.', '').toLowerCase();
+    if (!this.documentTypes.includes(ext)) {
+      throw new Error(`不支持的文件类型: ${ext}`);
+    }
+    try {
+      const stats = statSync(filePath);
+      this.logger.log(`文件大小: ${stats.size} bytes`);
+      if (stats.size > this.maxFileSize) {
+        throw new Error('文件大小超过10MB');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('文件大小超过')) {
+        throw error;
+      }
+      throw new Error(`文件不存在或无法访问: ${filePath}`);
+    }
+    return ext;
+  }
+
+  /**
+   * 验证远程 URL 和文件类型是否正确
    */
   private async validateUrl(url: string) {
     try {
@@ -67,11 +97,18 @@ export class DocumentParserService {
   async parsePdf(url: string) {
     const parser = new PDFParse({
       url,
-      verbosity: 1, // 设置日志级别，1为ERRORS
+      verbosity: 1,
     });
-    const text = await parser.getText();
-    parser.destroy();
-    return text.text;
+    try {
+      const result = await parser.getText({
+        lineEnforce: true,
+        lineThreshold: 4.6,
+        pageJoiner: '\n',
+      });
+      return result.text;
+    } finally {
+      await parser.destroy();
+    }
   }
   /**
    * 解析doc文件
@@ -108,17 +145,18 @@ export class DocumentParserService {
     }
     return (
       text
-        //统一换行符
+        // 统一换行符
         .replace(/\r\n/g, '\n')
         .replace(/\r/g, '\n')
-        //去除文字之前的空格
-        .replace(/\s+/g, '')
+        // 移除控制字符（保留换行\n和普通空格）
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+        // 合并连续空行为最多两个换行
         .replace(/\n{3,}/g, '\n\n')
+        // 每行内部：合并多个空格为单个空格，去除首尾空格
         .split('\n')
-        .map((line) => line.trim())
+        .map((line) => line.replace(/ {2,}/g, ' ').trim())
         .join('\n')
-        .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
-        .replace(/ {2,}/g, ' ')
+        // 移除页码标记
         .replace(/第\s*\d+\s*页/g, '')
         .replace(/Page\s+\d+/gi, '')
         .trim()
@@ -136,7 +174,6 @@ export class DocumentParserService {
         '简历内容过短，建议包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息',
       );
       isValidate = false;
-      ``;
     }
     // 检查是否包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息
     const keywords = [

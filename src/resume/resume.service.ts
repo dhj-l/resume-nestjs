@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   OnModuleInit,
+  OnModuleDestroy,
   Logger,
 } from '@nestjs/common';
 import { UpdateResumeDto } from './dto/update-resume.dto';
@@ -14,11 +15,15 @@ import {
   Template,
   TemplateDocument,
 } from '../template/entities/template.entity';
+import { ResumeAi } from '../resume-ai/entities/resume-ai.entity';
+import { ResumeEditRecord } from '../resume-ai/entities/resume-edit-record.entity';
+import { ResumeAnalysisRecord } from '../resume-ai/entities/resume-analysis-record.entity';
 import { Model, Types } from 'mongoose';
 import puppeteer from 'puppeteer';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { GetResumeDto } from './dto/get-resume.dto';
+import { AdminQueryResumeDto } from './dto/admin-query-resume.dto';
 
 type SortableItem = {
   globalSort?: number;
@@ -26,13 +31,23 @@ type SortableItem = {
 };
 
 @Injectable()
-export class ResumeService implements OnModuleInit {
+export class ResumeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ResumeService.name);
   private tailwindScript: string;
+
+  /** 复用的浏览器实例（应用级单例），避免每次生成 PDF 都创建新进程 */
+  private browser: any = null;
+  /** 浏览器初始化互斥锁，防止并发请求创建多个浏览器实例 */
+  private browserInitPromise: Promise<any> | null = null;
 
   constructor(
     @InjectModel(Resume.name) private resumeModel: Model<ResumeDocument>,
     @InjectModel(Template.name) private templateModel: Model<TemplateDocument>,
+    @InjectModel(ResumeAi.name) private resumeAiModel: Model<ResumeAi>,
+    @InjectModel(ResumeEditRecord.name)
+    private editRecordModel: Model<ResumeEditRecord>,
+    @InjectModel(ResumeAnalysisRecord.name)
+    private analysisRecordModel: Model<ResumeAnalysisRecord>,
   ) {}
 
   onModuleInit() {
@@ -51,6 +66,67 @@ export class ResumeService implements OnModuleInit {
     } catch (error) {
       this.logger.error('加载 Tailwind CSS 脚本失败', (error as Error).stack);
       throw new Error('初始化失败：无法加载 Tailwind CSS 脚本');
+    }
+  }
+
+  /**
+   * 获取或创建浏览器实例（应用级单例）
+   *
+   * 复用单个浏览器进程来生成所有 PDF，避免每次请求都创建/
+   * 销毁 Chromium 进程。使用互斥锁防止并发请求创建多个实例。
+   *
+   * 浏览器断开连接时自动重置引用，下次请求会重新创建。
+   */
+  private async getBrowser(): Promise<any> {
+    if (this.browser?.isConnected()) {
+      return this.browser;
+    }
+
+    // 并发控制：已有初始化在跑就直接等结果
+    if (this.browserInitPromise) {
+      return this.browserInitPromise;
+    }
+
+    this.browserInitPromise = (async () => {
+      try {
+        this.logger.log('启动浏览器实例（首次创建或断开后重建）');
+        const newBrowser = await puppeteer.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+
+        // 浏览器异常断开时清空引用，下次调用自动重建
+        newBrowser.on('disconnected', () => {
+          this.logger.warn('浏览器实例断开连接，将在下次请求时重建');
+          this.browser = null;
+        });
+
+        this.browser = newBrowser;
+        return newBrowser;
+      } finally {
+        // 无论成功失败都释放锁，失败后下次调用会重试
+        this.browserInitPromise = null;
+      }
+    })();
+
+    return this.browserInitPromise;
+  }
+
+  /**
+   * 应用关闭时清理浏览器资源
+   *
+   * NestJS 生命周期钩子，在 `app.close()` 或 `SIGTERM` 触发优雅关闭时调用。
+   * 确保没有孤儿 Chromium 子进程残留。
+   */
+  async onModuleDestroy(): Promise<void> {
+    if (this.browser) {
+      this.logger.log('关闭浏览器实例');
+      try {
+        await this.browser.close();
+      } catch (error) {
+        this.logger.error(`关闭浏览器失败: ${(error as Error).message}`);
+      }
+      this.browser = null;
     }
   }
 
@@ -102,6 +178,23 @@ export class ResumeService implements OnModuleInit {
     return result;
   }
 
+  /**
+   * 清洗从数据库查出的简历数据，兼容旧格式
+   * 将 skills/certificates/selfEvaluation 从字符串转换为嵌入式对象
+   */
+  private sanitizeResumeData(data: any) {
+    const result = { ...data };
+    const embedFields = ['skills', 'certificates', 'selfEvaluation'] as const;
+
+    for (const field of embedFields) {
+      if (typeof result[field] === 'string') {
+        result[field] = { content: result[field], globalSort: 0 };
+      }
+    }
+
+    return result;
+  }
+
   private getContent(html: string, css: string) {
     return `
         <!DOCTYPE html>
@@ -126,21 +219,61 @@ export class ResumeService implements OnModuleInit {
   }
 
   /**
+   * 后处理 Puppeteer 页面 DOM，消除固定高度分页导致的空白
+   */
+  private async preparePageForPdf(page: any): Promise<void> {
+    await page.addStyleTag({
+      content: `
+        * {
+          break-inside: auto !important;
+          page-break-inside: auto !important;
+          -webkit-column-break-inside: auto !important;
+        }
+      `,
+    });
+
+    await page.evaluate(() => {
+      const allElements = document.querySelectorAll('*');
+      const a4HeightPx = 1123; // 297mm ≈ 1123px at 96dpi
+
+      for (const el of allElements) {
+        const style = window.getComputedStyle(el);
+        if (style.height && style.height !== 'auto' && style.height !== '0px') {
+          const heightPx = parseFloat(style.height);
+          if (heightPx >= a4HeightPx * 0.9) {
+            (el as HTMLElement).style.height = 'auto';
+            (el as HTMLElement).style.minHeight = 'auto';
+            (el as HTMLElement).style.overflow = 'visible';
+          }
+        }
+      }
+
+      document.body.style.overflow = 'visible';
+      for (const child of document.body.children) {
+        const htmlChild = child as HTMLElement;
+        const style = window.getComputedStyle(htmlChild);
+        if (style.overflow === 'hidden' || style.overflowX === 'hidden') {
+          htmlChild.style.overflow = 'visible';
+          htmlChild.style.overflowX = 'visible';
+        }
+      }
+    });
+  }
+
+  /**
    * 下载简历 PDF
    * @param downloadResumeDto 包含 html 和 css
    * @returns PDF buffer
    */
   async downloadResume(downloadResumeDto: DownloadResumeDto): Promise<Buffer> {
     const { html, css } = downloadResumeDto;
-    let browser: any;
+    let page: any;
     try {
       this.logger.log('开始生成 PDF 简历');
-      browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
 
-      const page: any = await browser.newPage();
+      // 复用应用级浏览器单例，避免每次请求创建/销毁进程
+      const browser = await this.getBrowser();
+      page = await browser.newPage();
 
       const content = this.getContent(html, css);
 
@@ -151,6 +284,9 @@ export class ResumeService implements OnModuleInit {
       await page.waitForFunction(() => {
         return document.readyState === 'complete';
       });
+
+      // 后处理 DOM，消除固定高度分页导致的空白
+      await this.preparePageForPdf(page);
 
       // 生成 PDF
       const pdfBuffer = await page.pdf({
@@ -173,8 +309,13 @@ export class ResumeService implements OnModuleInit {
       );
       throw new BadRequestException('生成 PDF 失败，请检查 HTML 和 CSS 格式');
     } finally {
-      if (browser) {
-        await browser.close();
+      // 只关闭页面（轻量），浏览器实例留给后续请求复用
+      if (page) {
+        try {
+          await page.close();
+        } catch {
+          // 页面关闭失败不影响主流程
+        }
       }
     }
   }
@@ -211,11 +352,14 @@ export class ResumeService implements OnModuleInit {
         throw new NotFoundException('模板关联的简历原始数据已丢失');
       }
 
+      // 清洗旧格式数据，兼容 schema 变更前创建的模板
+      const sanitizedData = this.sanitizeResumeData(resumeData);
+
       // 创建新简历
       const newResume = await this.resumeModel.create({
-        ...resumeData,
-        type: resumeData.type || 'default',
-        title: title || `${resumeData.title} (副本)`,
+        ...sanitizedData,
+        type: sanitizedData.type || 'default',
+        title: title || `${sanitizedData.title} (副本)`,
         userId,
         user: new Types.ObjectId(userId),
         isTemplate: false,
@@ -271,26 +415,27 @@ export class ResumeService implements OnModuleInit {
       `用户 ${userId} 查询简历列表，页码: ${page}, 每页: ${pageSize}`,
     );
 
-    const res = await this.resumeModel
-      .find({ userId, isTemplate: false })
-      .select([
-        '_id',
-        'userId',
-        'title',
-        'cover',
-        'isTemplate',
-        'createdAt',
-        'updatedAt',
-      ])
-      .skip((page - 1) * pageSize)
-      .limit(pageSize)
-      .sort({ createdAt: -1 })
-      .exec();
-
-    const total = await this.resumeModel.countDocuments({
-      userId,
-      isTemplate: false,
-    });
+    const [res, total] = await Promise.all([
+      this.resumeModel
+        .find({ userId, isTemplate: false })
+        .select([
+          '_id',
+          'userId',
+          'title',
+          'cover',
+          'isTemplate',
+          'createdAt',
+          'updatedAt',
+        ])
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .sort({ createdAt: -1 })
+        .exec(),
+      this.resumeModel.countDocuments({
+        userId,
+        isTemplate: false,
+      }),
+    ]);
 
     this.logger.log(
       `用户 ${userId} 共有 ${total} 份简历，当前页返回 ${res.length} 份`,
@@ -398,6 +543,27 @@ export class ResumeService implements OnModuleInit {
     }
 
     this.logger.log(`用户 ${userId} 成功删除简历 ${id}`);
+
+    // 级联删除关联的 AI 生成记录、编辑记录、分析记录（尽力而为，不阻塞主删除结果）
+    try {
+      const [aiResult, editResult, analysisResult] = await Promise.all([
+        this.resumeAiModel.deleteMany({
+          $or: [{ generatedResumeId: id }, { resumeId: id }],
+        }),
+        this.editRecordModel.deleteMany({ resumeId: id }),
+        this.analysisRecordModel.deleteMany({ resumeId: id }),
+      ]);
+      this.logger.log(
+        `级联删除完成: AI记录${aiResult.deletedCount}条, ` +
+          `编辑记录${editResult.deletedCount}条, ` +
+          `分析记录${analysisResult.deletedCount}条`,
+      );
+    } catch (cascadeError) {
+      this.logger.error(
+        `级联删除关联记录失败（简历 ${id} 已删除）: ${(cascadeError as Error).message}`,
+      );
+    }
+
     return resume;
   }
 
@@ -447,5 +613,147 @@ export class ResumeService implements OnModuleInit {
       `用户 ${userId} 成功复制简历 ${id}，新简历 ID: ${newResume._id.toString()}`,
     );
     return newResume;
+  }
+
+  // ──────────────────────────────────────
+  //  管理员方法（跨用户，无 userId 限制）
+  //  TODO: 当角色系统完善后添加 AdminGuard
+  // ──────────────────────────────────────
+
+  /**
+   * 管理员查询所有简历（跨用户，分页 + 搜索 + 筛选）
+   * @param query 查询参数
+   */
+  async adminFindAll(query: AdminQueryResumeDto): Promise<{
+    items: Resume[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const pageSize =
+      query.pageSize && query.pageSize > 0 ? Math.min(query.pageSize, 100) : 10;
+    const skip = (page - 1) * pageSize;
+    const filter: Record<string, unknown> = {};
+
+    // 关键词搜索：标题
+    if (query.keyword) {
+      const escaped = query.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.title = { $regex: escaped, $options: 'i' };
+    }
+
+    // 按用户筛选
+    if (query.userId) {
+      filter.userId = query.userId;
+    }
+
+    // 按类型筛选
+    if (query.type) {
+      filter.type = query.type;
+    }
+
+    // 是否模板
+    if (query.isTemplate !== undefined) {
+      filter.isTemplate = query.isTemplate;
+    }
+
+    const [items, total] = await Promise.all([
+      this.resumeModel
+        .find(filter)
+        .select([
+          '_id',
+          'userId',
+          'title',
+          'cover',
+          'isTemplate',
+          'type',
+          'createdAt',
+          'updatedAt',
+        ])
+        .skip(skip)
+        .limit(pageSize)
+        .sort({ createdAt: -1 })
+        .exec(),
+      this.resumeModel.countDocuments(filter).exec(),
+    ]);
+
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * 管理员查看任意简历详情（无 userId 限制）
+   * @param id 简历 ID
+   * @returns 简历完整数据
+   */
+  async adminFindOne(id: string): Promise<Resume> {
+    const resume = await this.resumeModel.findById(id).exec();
+    if (!resume) {
+      throw new NotFoundException('简历不存在');
+    }
+    return resume;
+  }
+
+  /**
+   * 管理员删除任意简历（无 userId 限制）
+   * @param id 简历 ID
+   * @returns 被删除的简历
+   */
+  async adminRemove(id: string): Promise<Resume> {
+    const resume = await this.resumeModel.findByIdAndDelete(id).exec();
+    if (!resume) {
+      throw new NotFoundException('简历不存在');
+    }
+
+    this.logger.log(`管理员删除简历 ${id}`);
+
+    // 级联删除关联数据
+    try {
+      const [aiResult, editResult, analysisResult] = await Promise.all([
+        this.resumeAiModel.deleteMany({
+          $or: [{ generatedResumeId: id }, { resumeId: id }],
+        }),
+        this.editRecordModel.deleteMany({ resumeId: id }),
+        this.analysisRecordModel.deleteMany({ resumeId: id }),
+      ]);
+      this.logger.log(
+        `级联删除完成: AI记录${aiResult.deletedCount}条, ` +
+          `编辑记录${editResult.deletedCount}条, ` +
+          `分析记录${analysisResult.deletedCount}条`,
+      );
+    } catch (cascadeError) {
+      this.logger.error(
+        `级联删除关联记录失败（简历 ${id} 已删除）: ${(cascadeError as Error).message}`,
+      );
+    }
+
+    return resume;
+  }
+
+  /**
+   * 简历统计数据（管理员用）
+   * @returns 简历总数、模板数、按类型分布
+   */
+  async adminGetStats(): Promise<{
+    totalResumes: number;
+    totalTemplates: number;
+    totalNonTemplates: number;
+    byType: Record<string, number>;
+  }> {
+    const [totalResumes, totalTemplates, totalNonTemplates, byType] =
+      await Promise.all([
+        this.resumeModel.countDocuments().exec(),
+        this.resumeModel.countDocuments({ isTemplate: true }).exec(),
+        this.resumeModel.countDocuments({ isTemplate: false }).exec(),
+        this.resumeModel
+          .aggregate([{ $group: { _id: '$type', count: { $sum: 1 } } }])
+          .exec(),
+      ]);
+
+    const typeMap: Record<string, number> = {};
+    for (const item of byType) {
+      typeMap[item._id || 'default'] = item.count;
+    }
+
+    return { totalResumes, totalTemplates, totalNonTemplates, byType: typeMap };
   }
 }
