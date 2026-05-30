@@ -1,0 +1,47 @@
+import {
+  IsNotEmpty,
+  IsString,
+  IsOptional,
+  MinLength,
+  MaxLength,
+  Matches,
+} from 'class-validator';
+
+export class CreateTemplateDto {
+  /**
+   * 模板名称
+   */
+  @IsString({ message: '模板名称必须是字符串' })
+  @IsNotEmpty({ message: '模板名称不能为空' })
+  @MinLength(2, { message: '模板名称长度至少为2位' })
+  @MaxLength(50, { message: '模板名称长度不能超过50位' })
+  name: string;
+
+  /**
+   * 模板预览图URL
+   */
+  @IsString({ message: '预览图URL必须是字符串' })
+  @IsOptional()
+  @Matches(/^https?:\/\/.+|^\/[\w\-./]+$/, {
+    message:
+      '预览图URL格式不正确，需要以http(s)://开头的完整URL或以/开头的相对路径',
+  })
+  @MaxLength(500, { message: '预览图URL长度不能超过500位' })
+  previewImage?: string;
+
+  /**
+   * 适用岗位类型
+   */
+  @IsString({ message: '岗位类型必须是字符串' })
+  @IsNotEmpty({ message: '岗位类型不能为空' })
+  @MinLength(2, { message: '岗位类型长度至少为2位' })
+  @MaxLength(100, { message: '岗位类型长度不能超过100位' })
+  category: string;
+
+  /**
+   * 对应简历ID
+   */
+  @IsString({ message: '简历ID必须是字符串' })
+  @IsNotEmpty({ message: '简历ID不能为空' })
+  resumeId: string;
+}

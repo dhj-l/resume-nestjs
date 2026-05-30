@@ -1,0 +1,221 @@
+import { Injectable, Logger } from '@nestjs/common';
+import * as mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
+import { getHeader } from 'pdf-parse/node';
+import axios from 'axios';
+import { statSync } from 'fs';
+import { extname } from 'path';
+/**
+ * 文档解析服务
+ * 支持从 URL 下载并解析 PDF、DOCX 等格式的简历文件
+ */
+@Injectable()
+export class DocumentParserService {
+  private readonly logger = new Logger(DocumentParserService.name);
+  private readonly documentTypes = ['pdf', 'docx', 'doc'];
+  private readonly maxFileSize = 10 * 1024 * 1024; // 10MB
+  constructor() {}
+  /**
+   * 从文件路径或 URL 解析简历
+   */
+  async parserDocument(filePathOrUrl: string) {
+    if (!filePathOrUrl) {
+      throw new Error('文件路径或URL不能为空');
+    }
+    // 检测是本地文件还是远程 URL，分别走不同验证逻辑
+    const isUrl =
+      filePathOrUrl.startsWith('http://') ||
+      filePathOrUrl.startsWith('https://');
+    const type = isUrl
+      ? await this.validateUrl(filePathOrUrl)
+      : this.validateLocalFile(filePathOrUrl);
+    let text = '';
+    //判断对应的类型来决定解析方式
+    if (type === 'pdf') {
+      //解析pdf文件
+      text = await this.parsePdf(filePathOrUrl);
+    } else {
+      text = await this.parseDoc(filePathOrUrl);
+    }
+    //清除多余的空白，特殊字符
+    text = this.clearText(text);
+    //检查解析后的文本质量
+    const { isValidate, warnings } = this.validateTextQuality(text);
+    if (!isValidate) {
+      throw new Error(warnings.join(';'));
+    }
+    return text;
+  }
+  /**
+   * 验证本地文件（扩展名和大小）
+   */
+  private validateLocalFile(filePath: string): string {
+    const ext = extname(filePath).replace('.', '').toLowerCase();
+    if (!this.documentTypes.includes(ext)) {
+      throw new Error(`不支持的文件类型: ${ext}`);
+    }
+    try {
+      const stats = statSync(filePath);
+      this.logger.log(`文件大小: ${stats.size} bytes`);
+      if (stats.size > this.maxFileSize) {
+        throw new Error('文件大小超过10MB');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('文件大小超过')) {
+        throw error;
+      }
+      throw new Error(`文件不存在或无法访问: ${filePath}`);
+    }
+    return ext;
+  }
+
+  /**
+   * 验证远程 URL 和文件类型是否正确
+   */
+  private async validateUrl(url: string) {
+    try {
+      new URL(url);
+      const type = url.split('.').pop() || '';
+      if (!this.documentTypes.includes(type)) {
+        throw new Error('文件类型错误');
+      }
+      const { size } = await getHeader(url, true);
+
+      this.logger.log(`文件大小: ${size} bytes`);
+      if (size && size > this.maxFileSize) {
+        throw new Error('文件大小超过10MB');
+      }
+      return type;
+    } catch (error) {
+      throw new Error(error.message || 'url格式错误');
+    }
+  }
+
+  /**
+   * 解析pdf文件
+   */
+  async parsePdf(url: string) {
+    const parser = new PDFParse({
+      url,
+      verbosity: 1,
+    });
+    try {
+      const result = await parser.getText({
+        lineEnforce: true,
+        lineThreshold: 4.6,
+        pageJoiner: '\n',
+      });
+      return result.text;
+    } finally {
+      await parser.destroy();
+    }
+  }
+  /**
+   * 解析doc文件
+   */
+  async parseDoc(url: string) {
+    this.logger.log('开始解析doc文件', url);
+    let text;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      const response = await axios.get<ArrayBuffer>(url, {
+        responseType: 'arraybuffer',
+      });
+      const buffer = Buffer.from(response.data);
+      text = await mammoth.extractRawText({
+        buffer,
+      });
+    } else {
+      text = await mammoth.extractRawText({
+        path: url,
+      });
+    }
+    if (!text.value) {
+      throw new Error('解析doc文件失败');
+    }
+    this.logger.debug('解析doc文件成功', text.value);
+    return text.value;
+  }
+
+  /**
+   * 清除多余的空白，特殊字符
+   */
+  clearText(text: string) {
+    if (!text) {
+      return '';
+    }
+    return (
+      text
+        // 统一换行符
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        // 移除控制字符（保留换行\n和普通空格）
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+        // 合并连续空行为最多两个换行
+        .replace(/\n{3,}/g, '\n\n')
+        // 每行内部：合并多个空格为单个空格，去除首尾空格
+        .split('\n')
+        .map((line) => line.replace(/ {2,}/g, ' ').trim())
+        .join('\n')
+        // 移除页码标记
+        .replace(/第\s*\d+\s*页/g, '')
+        .replace(/Page\s+\d+/gi, '')
+        .trim()
+    );
+  }
+
+  /**
+   * 检查解析后的文本质量
+   */
+  validateTextQuality(text: string) {
+    const warnings: string[] = [];
+    let isValidate = true;
+    if (!text || text.length < 100) {
+      warnings.push(
+        '简历内容过短，建议包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息',
+      );
+      isValidate = false;
+    }
+    // 检查是否包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息
+    const keywords = [
+      '姓名',
+      '性别',
+      '年龄',
+      '手机',
+      '电话',
+      '邮箱',
+      'email',
+      '微信',
+      // 教育经历
+      '教育',
+      '学历',
+      '毕业',
+      '大学',
+      '学院',
+      '专业',
+      // 工作经历
+      '工作',
+      '经验',
+      '项目',
+      '公司',
+      '职位',
+      '岗位',
+      // 技能
+      '技能',
+      '能力',
+      '掌握',
+      '熟悉',
+      '精通',
+    ];
+    const filterKeyWords = keywords.filter((keyword) => text.includes(keyword));
+    if (filterKeyWords.length < 5) {
+      warnings.push(
+        '简历内容缺失关键信息，建议包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息',
+      );
+      isValidate = false;
+    }
+    return {
+      isValidate,
+      warnings,
+    };
+  }
+}
