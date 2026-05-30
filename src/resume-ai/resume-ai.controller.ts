@@ -12,6 +12,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { type Response } from 'express';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
@@ -27,6 +28,7 @@ import { ExportAnalysisDto } from './dto/export-analysis.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
+@Throttle({ default: { limit: 10, ttl: 60000 } })
 export class ResumeAiController {
   private readonly logger = new Logger(ResumeAiController.name);
 
