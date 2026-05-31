@@ -21,7 +21,12 @@
       "Bash(pnpm lint *)",
       "Bash(pnpm format *)",
       "Bash(python -c ' *)",
-      "Bash(pnpm exec *)"
+      "Bash(pnpm exec *)",
+      "Bash(git rm *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git checkout *)",
+      "Bash(git merge *)"
     ]
   }
 }

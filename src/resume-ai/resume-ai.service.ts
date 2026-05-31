@@ -11,6 +11,8 @@ import { PromptTemplate } from '@langchain/core/prompts';
 import { ContentPrompt, resumeAiPrompt } from './prompt/resume_ai';
 import { AiService } from 'src/ai/ai.service';
 import { JsonOutputParser } from '@langchain/core/output_parsers';
+import { ResumeSchema, AnalysisSchema } from './schemas';
+import { z } from 'zod';
 import { Resume } from 'src/resume/entities/resume.entity';
 import { CreateResumeDto } from 'src/resume/dto/create-resume.dto';
 import { DocumentParserService } from './document-parser.service';
@@ -429,7 +431,7 @@ export class ResumeAiService {
       const propmt = PromptTemplate.fromTemplate(resumeAiPrompt);
       const model = this.aiService.generateResume();
       // const model = this.aiService.generateResumeDeepSeek();
-      const parser = new JsonOutputParser();
+      const parser = this.aiService.createStructuredParser(ResumeSchema);
       const chain = propmt.pipe(model).pipe(parser);
       const res = await chain.invoke({
         jd,
@@ -476,7 +478,7 @@ export class ResumeAiService {
       }
       const prompt = PromptTemplate.fromTemplate(ContentPrompt);
       const model = this.aiService.generateImportResume();
-      const parser = new JsonOutputParser();
+      const parser = this.aiService.createStructuredParser(ResumeSchema);
       const chain = prompt.pipe(model).pipe(parser);
       const current = formatDate();
       const res = await chain.invoke({
@@ -1335,7 +1337,9 @@ export class ResumeAiService {
 
     const promptTemplate = PromptTemplate.fromTemplate(polishContentPrompt);
     const model = this.aiService.generateResume();
-    const parser = new JsonOutputParser();
+    const parser = this.aiService.createStructuredParser(
+      z.record(z.string(), z.string()),
+    );
     const chain = promptTemplate.pipe(model).pipe(parser);
 
     let aiResult: Record<string, string>;
@@ -1344,7 +1348,7 @@ export class ResumeAiService {
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('AI润色超时')), 60000);
       });
-      aiResult = await Promise.race([
+      aiResult = (await Promise.race([
         chain.invoke({
           current_content: JSON.stringify(
             isArrayModule ? (resume[key] as any[])[index] : resume[key],
@@ -1356,7 +1360,7 @@ export class ResumeAiService {
           current_date: formatDate(),
         }),
         timeoutPromise,
-      ]);
+      ])) as Record<string, string>;
     } catch (error: any) {
       this.recordAiUsage({
         userId,
@@ -1517,7 +1521,7 @@ export class ResumeAiService {
 
       const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
       const model = this.aiService.generateResume();
-      const parser = new JsonOutputParser();
+      const parser = this.aiService.createStructuredParser(AnalysisSchema);
       const chain = promptTemplate.pipe(model).pipe(parser);
 
       const timeoutPromise = new Promise<never>((_, reject) => {

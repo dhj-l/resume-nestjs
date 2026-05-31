@@ -16,11 +16,10 @@ export class CreateUserDto {
 
   @IsString()
   @IsNotEmpty({ message: '密码不能为空' })
-  @MinLength(8, { message: '密码长度至少为8位' })
+  @MinLength(6, { message: '密码长度至少为6位' })
   @MaxLength(128, { message: '密码长度不能超过128位' })
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
-    message:
-      '密码必须包含至少一个大写字母、一个小写字母、一个数字和一个特殊字符',
+  @Matches(/^[A-Za-z\d@$!%*?&._-]{6,}$/, {
+    message: '密码长度至少6位，可包含字母、数字和常见符号',
   })
   password: string;
 

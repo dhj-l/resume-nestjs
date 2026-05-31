@@ -7,6 +7,6 @@ import { IsString, IsNotEmpty, MinLength } from 'class-validator';
 export class SetPasswordDto {
   @IsString()
   @IsNotEmpty({ message: '请输入新密码' })
-  @MinLength(8, { message: '新密码长度至少为8位' })
+  @MinLength(6, { message: '新密码长度至少为6位' })
   newPassword: string;
 }
