@@ -59,3 +59,9 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Uploads directory
 /uploads
 
+# Build artifacts
+admin-dist.tar.gz
+
+# Tool cache
+.reasonix/
+
