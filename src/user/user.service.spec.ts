@@ -868,8 +868,9 @@ describe('UserService — getUserStats', () => {
   });
 
   it('应返回用户统计数据', async () => {
-    mockModel.countDocuments().exec
-      .mockResolvedValueOnce(100) // 总用户数
+    mockModel
+      .countDocuments()
+      .exec.mockResolvedValueOnce(100) // 总用户数
       .mockResolvedValueOnce(15); // 本月新增
 
     mockModel.aggregate().exec.mockResolvedValue([
@@ -892,8 +893,9 @@ describe('UserService — getUserStats', () => {
   });
 
   it('空数据库时应返回零值', async () => {
-    mockModel.countDocuments().exec
-      .mockResolvedValueOnce(0)
+    mockModel
+      .countDocuments()
+      .exec.mockResolvedValueOnce(0)
       .mockResolvedValueOnce(0);
     mockModel.aggregate().exec.mockResolvedValue([]);
 
@@ -916,12 +918,11 @@ describe('UserService — getUserStats', () => {
   });
 
   it('_id 为 null 的分组应映射为 email', async () => {
-    mockModel.countDocuments().exec
-      .mockResolvedValueOnce(50)
+    mockModel
+      .countDocuments()
+      .exec.mockResolvedValueOnce(50)
       .mockResolvedValueOnce(10);
-    mockModel.aggregate().exec.mockResolvedValue([
-      { _id: null, count: 50 },
-    ]);
+    mockModel.aggregate().exec.mockResolvedValue([{ _id: null, count: 50 }]);
 
     const result = await service.getUserStats();
 

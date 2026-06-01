@@ -309,9 +309,7 @@ describe('ResumeAiService - validateResumeContent', () => {
 2025-05 ~ 2025-09 \t北京京控信息技术有限公司 \t前端开发工程师
       `;
 
-      const result = service['validateResumeContent'](
-        resumeWithSpacedLabels,
-      );
+      const result = service['validateResumeContent'](resumeWithSpacedLabels);
 
       expect(result.isValid).toBe(true);
       expect(result.details.hasPersonalInfo).toBe(true);

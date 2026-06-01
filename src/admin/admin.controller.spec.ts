@@ -62,9 +62,7 @@ describe('AdminController', () => {
       const error = new Error('数据库连接失败');
       mockAdminService.getDashboard.mockRejectedValue(error);
 
-      await expect(controller.getDashboard()).rejects.toThrow(
-        '数据库连接失败',
-      );
+      await expect(controller.getDashboard()).rejects.toThrow('数据库连接失败');
     });
   });
 });

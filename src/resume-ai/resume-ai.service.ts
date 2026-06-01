@@ -1665,8 +1665,7 @@ export class ResumeAiService {
     if (meta.candidate_name) lines.push(`- **候选人**：${meta.candidate_name}`);
     if (meta.target_position)
       lines.push(`- **目标岗位**：${meta.target_position}`);
-    if (meta.analysis_date)
-      lines.push(`- **分析日期**：${meta.analysis_date}`);
+    if (meta.analysis_date) lines.push(`- **分析日期**：${meta.analysis_date}`);
     lines.push(`- **目标 JD**：${record.jobDescription}`);
     lines.push('');
 
@@ -1776,9 +1775,7 @@ export class ResumeAiService {
       if (market.candidate_positioning)
         lines.push(`- **候选人定位**：${market.candidate_positioning}`);
       if (market.salary_competitiveness_note)
-        lines.push(
-          `- **薪资竞争力**：${market.salary_competitiveness_note}`,
-        );
+        lines.push(`- **薪资竞争力**：${market.salary_competitiveness_note}`);
     } else {
       lines.push('（暂无数据）');
     }
@@ -1793,9 +1790,7 @@ export class ResumeAiService {
         lines.push(`- **技术栈评分**：${tech.tech_stack_score}`);
       if (tech.tech_stack_summary)
         lines.push(`- **总体评价**：${tech.tech_stack_summary}`);
-      lines.push(
-        `- **匹配技能**：${listOrNone(tech.matching_skills)}`,
-      );
+      lines.push(`- **匹配技能**：${listOrNone(tech.matching_skills)}`);
       lines.push(
         `- **缺失关键技能**：${listOrNone(tech.missing_critical_skills)}`,
       );
@@ -1822,9 +1817,7 @@ export class ResumeAiService {
       if (career.growth_rate)
         lines.push(`- **成长速度**：${career.growth_rate}`);
       if (career.estimated_work_years)
-        lines.push(
-          `- **预估工作年限**：${career.estimated_work_years}`,
-        );
+        lines.push(`- **预估工作年限**：${career.estimated_work_years}`);
       const flags = career.red_flags || [];
       lines.push(`- **预警信号**：${listOrNone(flags)}`);
     } else {

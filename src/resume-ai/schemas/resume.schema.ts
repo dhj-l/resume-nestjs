@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
-/** AI 生成的简历 schema — 宽松校验，只保证 JSON 结构合法 */
+/** AI 生成的简历 schema — 核心字段必填，防止空结果或关键信息缺失 */
 export const ResumeSchema = z
   .object({
     title: z.string().optional(),
     type: z.string().optional(),
     basicInfo: z
       .object({
-        name: z.string().optional(),
+        name: z.string(),
         gender: z.string().optional(),
         phone: z.string().optional(),
         age: z.string().optional(),
@@ -16,8 +16,7 @@ export const ResumeSchema = z
         politicalStatus: z.string().optional(),
         workYear: z.string().optional(),
       })
-      .passthrough()
-      .optional(),
+      .passthrough(),
     jobIntention: z
       .object({
         jobIntention: z.string().optional(),
@@ -27,37 +26,33 @@ export const ResumeSchema = z
       })
       .passthrough()
       .optional(),
-    educationBackground: z
-      .array(
-        z
-          .object({
-            schoolName: z.string().optional(),
-            degree: z.string().optional(),
-            major: z.string().optional(),
-            enrollmentTime: z.string().optional(),
-            graduationTime: z.string().optional(),
-            content: z.string().optional(),
-            globalSort: z.number().optional(),
-            localSort: z.number().optional(),
-          })
-          .passthrough(),
-      )
-      .optional(),
-    workExperience: z
-      .array(
-        z
-          .object({
-            companyName: z.string().optional(),
-            position: z.string().optional(),
-            workTime: z.string().optional(),
-            dismissalTime: z.string().optional(),
-            workDescription: z.string().optional(),
-            globalSort: z.number().optional(),
-            localSort: z.number().optional(),
-          })
-          .passthrough(),
-      )
-      .optional(),
+    educationBackground: z.array(
+      z
+        .object({
+          schoolName: z.string(),
+          degree: z.string().optional(),
+          major: z.string().optional(),
+          enrollmentTime: z.string().optional(),
+          graduationTime: z.string().optional(),
+          content: z.string().optional(),
+          globalSort: z.number().optional(),
+          localSort: z.number().optional(),
+        })
+        .passthrough(),
+    ),
+    workExperience: z.array(
+      z
+        .object({
+          companyName: z.string(),
+          position: z.string(),
+          workTime: z.string().optional(),
+          dismissalTime: z.string().optional(),
+          workDescription: z.string().optional(),
+          globalSort: z.number().optional(),
+          localSort: z.number().optional(),
+        })
+        .passthrough(),
+    ),
     projectExperience: z
       .array(
         z
