@@ -12,16 +12,16 @@ export const AnalysisSchema = z
       })
       .passthrough()
       .optional(),
-    overall_score: z.number().optional(),
+    overall_score: z.number().min(0).max(100).optional(),
     competitiveness_level: z.string().optional(),
     dimension_scores: z
       .array(
         z
           .object({
             name: z.string().optional(),
-            score: z.number().optional(),
-            max: z.number().optional(),
-            weight: z.number().optional(),
+            score: z.number().min(0).optional(),
+            max: z.number().min(1).optional(),
+            weight: z.number().min(0).max(1).optional(),
             comment: z.string().optional(),
           })
           .passthrough(),

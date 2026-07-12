@@ -65,3 +65,5 @@ admin-dist.tar.gz
 # Tool cache
 .reasonix/
 
+/mcp
+
