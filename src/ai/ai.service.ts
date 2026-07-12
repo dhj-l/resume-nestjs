@@ -41,7 +41,11 @@ export class AiService {
    */
   generateImportResume() {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
-    const chat = this.createDefaultDeepSeek({ apiKey, temperature: 0.1 });
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.1,
+      maxTokens: 8192,
+    });
     return chat;
   }
 

@@ -422,28 +422,42 @@ export class ResumeAiService {
   }
 
   /**
-   * ai创建简历
+   * ai创建简历（带自动重试）
    * @param jd 岗位 JD
    * @param content 详细信息
    */
   async createResumeByAi(jd: string, content: string) {
-    try {
-      const propmt = PromptTemplate.fromTemplate(resumeAiPrompt);
-      const model = this.aiService.generateResume();
-      // const model = this.aiService.generateResumeDeepSeek();
-      const parser = this.aiService.createStructuredParser(ResumeSchema);
-      const chain = propmt.pipe(model).pipe(parser);
-      const res = await chain.invoke({
-        jd,
-        experience: content,
-        current_date: formatDate(),
-      });
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY_MS = 1500;
 
-      return res;
-    } catch (error) {
-      this.logger.error('ai创建简历失败', (error as Error).stack);
-      throw new BadRequestException('ai创建简历失败');
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const propmt = PromptTemplate.fromTemplate(resumeAiPrompt);
+        const model = this.aiService.generateResume();
+        const parser = this.aiService.createStructuredParser(ResumeSchema);
+        const chain = propmt.pipe(model).pipe(parser);
+        const res = await chain.invoke({
+          jd,
+          experience: content,
+          current_date: formatDate(),
+        });
+
+        return res;
+      } catch (error) {
+        lastError = error;
+        this.logger.warn(
+          `createResumeByAi 第 ${attempt + 1} 次失败，${MAX_RETRIES - attempt} 次重试剩余`,
+        );
+        if (attempt < MAX_RETRIES) {
+          await this.sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
+        }
+      }
     }
+
+    this.logger.error('ai创建简历失败', lastError?.stack);
+    throw new BadRequestException('AI 创建简历失败，请稍后重试');
   }
 
   /**
@@ -463,52 +477,78 @@ export class ResumeAiService {
   }
 
   /**
-   * 解析简历
+   * 解析简历（带自动重试）
    */
   async parseResume(parserResumeDto: ParserResumeDto, userId: string) {
-    const startTime = Date.now();
-    try {
-      //检查当前用户是否存在正在创建的简历
-      await this.checkExistResume(userId);
-      const { resumeContent, templateType, templateId } = parserResumeDto;
-      //校验简历内容是否合格
-      const { isValid, reason } = this.validateResumeContent(resumeContent);
-      if (!isValid) {
-        throw new BadRequestException(reason);
-      }
-      const prompt = PromptTemplate.fromTemplate(ContentPrompt);
-      const model = this.aiService.generateImportResume();
-      const parser = this.aiService.createStructuredParser(ResumeSchema);
-      const chain = prompt.pipe(model).pipe(parser);
-      const current = formatDate();
-      const res = await chain.invoke({
-        resume_text: resumeContent,
-        current_date: current,
-      });
-      const aiDuration = Date.now() - startTime;
-      const result = await this.createResume(
-        { ...res, templateId } as CreateResumeDto,
-        templateType,
-        userId,
-      );
-      void this.recordAiUsage({
-        userId,
-        aiFunction: AiFunctionEnum.SmartImport,
-        success: true,
-        duration: aiDuration,
-        resumeId: result._id.toString(),
-      });
-      return result;
-    } catch (error) {
-      void this.recordAiUsage({
-        userId,
-        aiFunction: AiFunctionEnum.SmartImport,
-        success: false,
-        duration: Date.now() - startTime,
-        errorMessage: error.message,
-      });
-      throw new BadRequestException(error.message);
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY_MS = 1500;
+    const MAX_INPUT_LENGTH = 8000;
+
+    let lastError: Error | null = null;
+
+    await this.checkExistResume(userId);
+    const { resumeContent, templateType, templateId } = parserResumeDto;
+
+    // 校验简历内容是否合格
+    const { isValid, reason } = this.validateResumeContent(resumeContent);
+    if (!isValid) {
+      throw new BadRequestException(reason);
     }
+
+    // 输入截断保护：防止 token 溢出
+    const truncatedContent =
+      resumeContent.length > MAX_INPUT_LENGTH
+        ? resumeContent.slice(0, MAX_INPUT_LENGTH) +
+          '\n\n[因内容过长已截断，仅保留前8000字符]'
+        : resumeContent;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const startTime = Date.now();
+      try {
+        const prompt = PromptTemplate.fromTemplate(ContentPrompt);
+        const model = this.aiService.generateImportResume();
+        const parser = this.aiService.createStructuredParser(ResumeSchema);
+        const chain = prompt.pipe(model).pipe(parser);
+        const current = formatDate();
+        const res = await chain.invoke({
+          resume_text: truncatedContent,
+          current_date: current,
+        });
+        const aiDuration = Date.now() - startTime;
+        const result = await this.createResume(
+          { ...res, templateId } as CreateResumeDto,
+          templateType,
+          userId,
+        );
+        void this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.SmartImport,
+          success: true,
+          duration: aiDuration,
+          resumeId: result._id.toString(),
+        });
+        return result;
+      } catch (error) {
+        lastError = error;
+        void this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.SmartImport,
+          success: false,
+          duration: Date.now() - startTime,
+          errorMessage: error.message,
+        });
+        if (attempt < MAX_RETRIES) {
+          this.logger.warn(
+            `parseResume 第 ${attempt + 1} 次失败，${MAX_RETRIES - attempt} 次重试剩余: ${error.message}`,
+          );
+          await this.sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
+        }
+      }
+    }
+
+    throw new BadRequestException(
+      `简历解析失败，已重试 ${MAX_RETRIES} 次: ${lastError?.message || '未知错误'}`,
+    );
   }
 
   /**
@@ -931,9 +971,17 @@ export class ResumeAiService {
       // 聚合结果
       const aggregatedResult = this.aggregateModuleResults(moduleResults);
 
+      // Zod 结构校验：确保聚合结果符合 ResumeSchema
+      const parsed = ResumeSchema.safeParse(aggregatedResult);
+      if (!parsed.success) {
+        this.logger.warn(
+          `SSE 聚合结果 Zod 校验失败: ${parsed.error.message}，将使用原始数据继续`,
+        );
+      }
+
       // 创建简历
       const resume = await this.createResume(
-        aggregatedResult as CreateResumeDto,
+        (parsed.success ? parsed.data : aggregatedResult) as CreateResumeDto,
         record.templateType,
         userId,
       );
@@ -1665,8 +1713,7 @@ export class ResumeAiService {
     if (meta.candidate_name) lines.push(`- **候选人**：${meta.candidate_name}`);
     if (meta.target_position)
       lines.push(`- **目标岗位**：${meta.target_position}`);
-    if (meta.analysis_date)
-      lines.push(`- **分析日期**：${meta.analysis_date}`);
+    if (meta.analysis_date) lines.push(`- **分析日期**：${meta.analysis_date}`);
     lines.push(`- **目标 JD**：${record.jobDescription}`);
     lines.push('');
 
@@ -1776,9 +1823,7 @@ export class ResumeAiService {
       if (market.candidate_positioning)
         lines.push(`- **候选人定位**：${market.candidate_positioning}`);
       if (market.salary_competitiveness_note)
-        lines.push(
-          `- **薪资竞争力**：${market.salary_competitiveness_note}`,
-        );
+        lines.push(`- **薪资竞争力**：${market.salary_competitiveness_note}`);
     } else {
       lines.push('（暂无数据）');
     }
@@ -1793,9 +1838,7 @@ export class ResumeAiService {
         lines.push(`- **技术栈评分**：${tech.tech_stack_score}`);
       if (tech.tech_stack_summary)
         lines.push(`- **总体评价**：${tech.tech_stack_summary}`);
-      lines.push(
-        `- **匹配技能**：${listOrNone(tech.matching_skills)}`,
-      );
+      lines.push(`- **匹配技能**：${listOrNone(tech.matching_skills)}`);
       lines.push(
         `- **缺失关键技能**：${listOrNone(tech.missing_critical_skills)}`,
       );
@@ -1822,9 +1865,7 @@ export class ResumeAiService {
       if (career.growth_rate)
         lines.push(`- **成长速度**：${career.growth_rate}`);
       if (career.estimated_work_years)
-        lines.push(
-          `- **预估工作年限**：${career.estimated_work_years}`,
-        );
+        lines.push(`- **预估工作年限**：${career.estimated_work_years}`);
       const flags = career.red_flags || [];
       lines.push(`- **预警信号**：${listOrNone(flags)}`);
     } else {

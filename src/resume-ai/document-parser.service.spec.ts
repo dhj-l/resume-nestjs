@@ -201,7 +201,9 @@ Google
 
   describe('parserDocument', () => {
     it('should throw error for empty url', async () => {
-      await expect(service.parserDocument('')).rejects.toThrow('文件路径或URL不能为空');
+      await expect(service.parserDocument('')).rejects.toThrow(
+        '文件路径或URL不能为空',
+      );
     });
 
     it('should throw error for invalid url format', async () => {
