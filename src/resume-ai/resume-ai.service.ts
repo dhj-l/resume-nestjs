@@ -1516,16 +1516,34 @@ export class ResumeAiService {
   }
 
   /**
-   * AI分析简历与岗位JD的匹配度
+   * AI分析简历与岗位JD的匹配度（带自动重试 + 输入截断 + 挂起任务恢复）
    */
   async analyzeResume(analyzeResumeDto: AnalyzeResumeDto, userId: string) {
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY_MS = 1500;
+    const MAX_INPUT_LENGTH = 8000;
+    const STUCK_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+
     const { resumeId, jobDescription } = analyzeResumeDto;
 
+    // 校验 JD 内容
     const { isValid, reason } = this.validateJobDescription(jobDescription);
     if (!isValid) {
       throw new BadRequestException(reason);
     }
 
+    // 恢复超过 5 分钟的挂起分析任务
+    const stuckThreshold = new Date(Date.now() - STUCK_TASK_TIMEOUT_MS);
+    await this.analysisRecordModel.updateMany(
+      {
+        userId,
+        status: AnalysisStatusEnum.Analyzing,
+        createdAt: { $lt: stuckThreshold },
+      },
+      { status: AnalysisStatusEnum.Failed, failReason: '任务超时自动恢复' },
+    );
+
+    // 检查是否有正在进行的分析
     const existingAnalysis = await this.analysisRecordModel.findOne({
       userId,
       status: AnalysisStatusEnum.Analyzing,
@@ -1534,6 +1552,7 @@ export class ResumeAiService {
       throw new BadRequestException('存在正在分析的任务，请稍后重试');
     }
 
+    // 查询简历
     const resume = await this.resumeModel
       .findOne({ _id: resumeId, userId })
       .lean();
@@ -1541,6 +1560,38 @@ export class ResumeAiService {
       throw new BadRequestException('简历不存在');
     }
 
+    // 组装简历内容并截断
+    const fullResumeContent = JSON.stringify(
+      {
+        basicInfo: resume.basicInfo,
+        jobIntention: resume.jobIntention,
+        educationBackground: resume.educationBackground,
+        workExperience: resume.workExperience,
+        projectExperience: resume.projectExperience,
+        skills: resume.skills,
+        certificates: resume.certificates,
+        selfEvaluation: resume.selfEvaluation,
+        campusExperience: resume.campusExperience,
+        internshipExperience: resume.internshipExperience,
+      },
+      null,
+      2,
+    );
+
+    const truncatedResumeContent =
+      fullResumeContent.length > MAX_INPUT_LENGTH
+        ? fullResumeContent.slice(0, MAX_INPUT_LENGTH) +
+          '\n\n[因内容过长已截断，仅保留前8000字符]'
+        : fullResumeContent;
+
+    // 截断 JD
+    const truncatedJd =
+      jobDescription.length > MAX_INPUT_LENGTH
+        ? jobDescription.slice(0, MAX_INPUT_LENGTH) +
+          '\n\n[因内容过长已截断，仅保留前8000字符]'
+        : jobDescription;
+
+    // 创建分析记录
     const record = await this.analysisRecordModel.create({
       resumeId,
       jobDescription,
@@ -1548,89 +1599,87 @@ export class ResumeAiService {
       userId,
     });
 
-    const aiStartTime = Date.now();
-    try {
-      const resumeContent = JSON.stringify(
-        {
-          basicInfo: resume.basicInfo,
-          jobIntention: resume.jobIntention,
-          educationBackground: resume.educationBackground,
-          workExperience: resume.workExperience,
-          projectExperience: resume.projectExperience,
-          skills: resume.skills,
-          certificates: resume.certificates,
-          selfEvaluation: resume.selfEvaluation,
-          campusExperience: resume.campusExperience,
-          internshipExperience: resume.internshipExperience,
-        },
-        null,
-        2,
-      );
+    let lastError: Error | null = null;
 
-      const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
-      const model = this.aiService.generateResume();
-      const parser = this.aiService.createStructuredParser(AnalysisSchema);
-      const chain = promptTemplate.pipe(model).pipe(parser);
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('AI分析超时')), 120000);
-      });
-
-      const aiResult = await Promise.race([
-        chain.invoke({
-          jd: jobDescription,
-          experience: resumeContent,
-          current_date: formatDate(),
-        }),
-        timeoutPromise,
-      ]);
-
-      const aiDuration = Date.now() - aiStartTime;
-
-      if (!aiResult || Object.keys(aiResult).length === 0) {
-        throw new BadRequestException('AI分析结果为空，请重试');
-      }
-
-      await this.analysisRecordModel.findByIdAndUpdate(record._id, {
-        status: AnalysisStatusEnum.Completed,
-        analysisResult: aiResult,
-      });
-
-      this.recordAiUsage({
-        userId,
-        aiFunction: AiFunctionEnum.ResumeAnalysis,
-        success: true,
-        duration: aiDuration,
-        resumeId,
-        metadata: { analysisRecordId: record._id.toString() },
-      });
-
-      return {
-        recordId: record._id,
-        analysisResult: aiResult,
-      };
-    } catch (error: any) {
-      this.recordAiUsage({
-        userId,
-        aiFunction: AiFunctionEnum.ResumeAnalysis,
-        success: false,
-        duration: Date.now() - aiStartTime,
-        errorMessage: error.message,
-        resumeId,
-        metadata: { analysisRecordId: record._id.toString() },
-      });
-      // 更新状态为失败（尽力而为，不掩盖原始错误）
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const aiStartTime = Date.now();
       try {
-        await this.analysisRecordModel.findByIdAndUpdate(record._id, {
-          status: AnalysisStatusEnum.Failed,
+        const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
+        const model = this.aiService.generateAnalyzeResume();
+        const parser = this.aiService.createStructuredParser(AnalysisSchema);
+        const chain = promptTemplate.pipe(model).pipe(parser);
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('AI分析超时')), 120000);
         });
-      } catch {
-        // 状态更新失败不影响错误抛出
+
+        const aiResult = await Promise.race([
+          chain.invoke({
+            jd: truncatedJd,
+            experience: truncatedResumeContent,
+            current_date: formatDate(),
+          }),
+          timeoutPromise,
+        ]);
+
+        const aiDuration = Date.now() - aiStartTime;
+
+        if (!aiResult || Object.keys(aiResult).length === 0) {
+          throw new BadRequestException('AI分析结果为空');
+        }
+
+        await this.analysisRecordModel.findByIdAndUpdate(record._id, {
+          status: AnalysisStatusEnum.Completed,
+          analysisResult: aiResult,
+        });
+
+        this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.ResumeAnalysis,
+          success: true,
+          duration: aiDuration,
+          resumeId,
+          metadata: { analysisRecordId: record._id.toString() },
+        });
+
+        return {
+          recordId: record._id,
+          analysisResult: aiResult,
+        };
+      } catch (error: any) {
+        lastError = error;
+        this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.ResumeAnalysis,
+          success: false,
+          duration: Date.now() - aiStartTime,
+          errorMessage: error.message,
+          resumeId,
+          metadata: { analysisRecordId: record._id.toString() },
+        });
+
+        if (attempt < MAX_RETRIES) {
+          this.logger.warn(
+            `analyzeResume 第 ${attempt + 1} 次失败，${MAX_RETRIES - attempt} 次重试剩余: ${error.message}`,
+          );
+          await this.sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
+        }
       }
-      if (error instanceof BadRequestException) throw error;
-      this.logger.error(`AI分析失败: ${error.message}`, error.stack);
-      throw new BadRequestException('AI分析失败，请稍后重试');
     }
+
+    // 所有重试均失败
+    try {
+      await this.analysisRecordModel.findByIdAndUpdate(record._id, {
+        status: AnalysisStatusEnum.Failed,
+        failReason: lastError?.message || '未知错误',
+      });
+    } catch {
+      // 状态更新失败不影响错误抛出
+    }
+    this.logger.error(`AI分析失败，已重试 ${MAX_RETRIES} 次`, lastError?.stack);
+    throw new BadRequestException(
+      `AI分析失败，已重试 ${MAX_RETRIES} 次: ${lastError?.message || '未知错误'}`,
+    );
   }
 
   /**

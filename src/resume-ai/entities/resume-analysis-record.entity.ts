@@ -42,6 +42,12 @@ export class ResumeAnalysisRecord {
   analysisResult?: Record<string, any>;
 
   /**
+   * 失败原因
+   */
+  @Prop({ default: undefined })
+  failReason?: string;
+
+  /**
    * 用户ID
    */
   @Prop({

@@ -15,7 +15,7 @@ export class AiService {
     const {
       model = 'deepseek-v4-flash',
       apiKey,
-      maxTokens = 4000,
+      maxTokens = 30000,
       temperature = 0.5,
     } = props;
     const chat = new ChatDeepSeek({
@@ -44,7 +44,20 @@ export class AiService {
     const chat = this.createDefaultDeepSeek({
       apiKey,
       temperature: 0.1,
-      maxTokens: 8192,
+      maxTokens: 36384,
+    });
+    return chat;
+  }
+
+  /**
+   * 简历分析AI模型（低温 + 大 token 上限，适应复杂分析输出）
+   */
+  generateAnalyzeResume() {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.1,
+      maxTokens: 36384,
     });
     return chat;
   }
