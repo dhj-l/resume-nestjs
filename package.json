@@ -94,6 +94,10 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/$1",
+      "^ansi-styles$": "<rootDir>/../test/__mocks__/ansi-styles.js"
+    },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

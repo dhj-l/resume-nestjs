@@ -58,6 +58,7 @@ import {
 import { MODULE_PROMPTS, MODULE_EXECUTION_ORDER } from './prompt/modules';
 import { GetResumeRecordsDto } from './dto/get-resume-record.dto';
 import { ResumeEditRecord } from './entities/resume-edit-record.entity';
+import { toResumeRecordResponse } from './resume-records.mapper';
 import { PolishResumeDto } from './dto/polish-resume.dto';
 import { UndoEditDto } from './dto/undo-edit.dto';
 import { polishContentPrompt } from './prompt/polish-content.prompt';
@@ -72,6 +73,13 @@ import {
   AiUsageRecord,
   AiFunctionEnum,
 } from './entities/ai-usage-record.entity';
+import {
+  ANALYSIS_INPUT_BUDGET,
+  ANALYSIS_INPUT_BUDGET_FALLBACK,
+  ANALYSIS_TIMEOUT_MS,
+  buildTruncatedAnalysisContext,
+  normalizeAnalysisResult,
+} from './analysis.utils';
 
 /**
  * 将数组格式化为 Markdown 列表字符串，空数组返回「无」
@@ -565,9 +573,10 @@ export class ResumeAiService {
           .select('-__v -resumeContent -generatedResumeDescription -detailInfo')
           .skip(skip)
           .limit(pageSize)
-          .sort({ createdAt: -1 }),
+          .sort({ createdAt: -1 })
+          .lean(),
       ]);
-      return { total, list };
+      return { total, list: list.map(toResumeRecordResponse) };
     } catch (error: any) {
       throw new BadRequestException(error.message);
     }
@@ -1521,7 +1530,6 @@ export class ResumeAiService {
   async analyzeResume(analyzeResumeDto: AnalyzeResumeDto, userId: string) {
     const MAX_RETRIES = 2;
     const RETRY_DELAY_MS = 1500;
-    const MAX_INPUT_LENGTH = 8000;
     const STUCK_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
     const { resumeId, jobDescription } = analyzeResumeDto;
@@ -1560,37 +1568,6 @@ export class ResumeAiService {
       throw new BadRequestException('简历不存在');
     }
 
-    // 组装简历内容并截断
-    const fullResumeContent = JSON.stringify(
-      {
-        basicInfo: resume.basicInfo,
-        jobIntention: resume.jobIntention,
-        educationBackground: resume.educationBackground,
-        workExperience: resume.workExperience,
-        projectExperience: resume.projectExperience,
-        skills: resume.skills,
-        certificates: resume.certificates,
-        selfEvaluation: resume.selfEvaluation,
-        campusExperience: resume.campusExperience,
-        internshipExperience: resume.internshipExperience,
-      },
-      null,
-      2,
-    );
-
-    const truncatedResumeContent =
-      fullResumeContent.length > MAX_INPUT_LENGTH
-        ? fullResumeContent.slice(0, MAX_INPUT_LENGTH) +
-          '\n\n[因内容过长已截断，仅保留前8000字符]'
-        : fullResumeContent;
-
-    // 截断 JD
-    const truncatedJd =
-      jobDescription.length > MAX_INPUT_LENGTH
-        ? jobDescription.slice(0, MAX_INPUT_LENGTH) +
-          '\n\n[因内容过长已截断，仅保留前8000字符]'
-        : jobDescription;
-
     // 创建分析记录
     const record = await this.analysisRecordModel.create({
       resumeId,
@@ -1604,23 +1581,54 @@ export class ResumeAiService {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const aiStartTime = Date.now();
       try {
+        // 最后一次兜底尝试收紧输入预算，前两次使用常规预算
+        const inputBudget =
+          attempt === MAX_RETRIES
+            ? ANALYSIS_INPUT_BUDGET_FALLBACK
+            : ANALYSIS_INPUT_BUDGET;
+        const { resumeContent, jobDescription: truncatedJd } =
+          buildTruncatedAnalysisContext(
+            resume,
+            jobDescription,
+            inputBudget,
+          );
+
         const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
-        const model = this.aiService.generateAnalyzeResume();
-        const parser = this.aiService.createStructuredParser(AnalysisSchema);
+        // 第一次用配置的思考模式（默认 low），超时重试时强制关闭思考
+        const model =
+          attempt === 0
+            ? this.aiService.generateAnalyzeResume()
+            : this.aiService.generateAnalyzeResume('disabled');
+        const parser = this.aiService.createRobustStructuredParser(
+          AnalysisSchema,
+        );
         const chain = promptTemplate.pipe(model).pipe(parser);
 
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('AI分析超时')), 120000);
-        });
+        const controller = new AbortController();
+        const timeoutTimer = setTimeout(
+          () => controller.abort(),
+          ANALYSIS_TIMEOUT_MS,
+        );
 
-        const aiResult = await Promise.race([
-          chain.invoke({
-            jd: truncatedJd,
-            experience: truncatedResumeContent,
-            current_date: formatDate(),
-          }),
-          timeoutPromise,
-        ]);
+        let aiResult: Record<string, any>;
+        try {
+          const parsed = await chain.invoke(
+            {
+              jd: truncatedJd,
+              experience: resumeContent,
+              current_date: formatDate(),
+            },
+            { signal: controller.signal },
+          );
+          aiResult = normalizeAnalysisResult(parsed);
+        } catch (error: any) {
+          if (controller.signal.aborted) {
+            throw new Error('AI分析超时');
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutTimer);
+        }
 
         const aiDuration = Date.now() - aiStartTime;
 

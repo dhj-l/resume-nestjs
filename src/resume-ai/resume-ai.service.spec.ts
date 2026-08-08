@@ -4,6 +4,10 @@ import { BadRequestException } from '@nestjs/common';
 import { ResumeAi, ResumeAiStatusEnum } from './entities/resume-ai.entity';
 import { Resume } from 'src/resume/entities/resume.entity';
 import { Model } from 'mongoose';
+import { RunnableLambda } from '@langchain/core/runnables';
+import { AiService } from 'src/ai/ai.service';
+import { DocumentParserService } from './document-parser.service';
+import { ANALYSIS_TIMEOUT_MS } from './analysis.utils';
 
 describe('ResumeAiService - validateResumeContent', () => {
   let service: ResumeAiService;
@@ -21,8 +25,28 @@ describe('ResumeAiService - validateResumeContent', () => {
     findOne: jest.fn(),
   } as any;
 
+  const mockEditRecordModel = {
+    create: jest.fn(),
+    findOne: jest.fn(),
+    findByIdAndDelete: jest.fn(),
+  } as any;
+
+  const mockAnalysisRecordModel = {
+    create: jest.fn(),
+    findOne: jest.fn(),
+    updateMany: jest.fn(),
+    findByIdAndUpdate: jest.fn(),
+  } as any;
+
+  const mockAiUsageRecordModel = {
+    create: jest.fn(),
+  } as any;
+
   const mockAiService = {
     generateResume: jest.fn(),
+    generateAnalyzeResume: jest.fn(),
+    createStructuredParser: jest.fn(),
+    createRobustStructuredParser: jest.fn(),
   };
 
   const mockDocumentParserService = {
@@ -42,11 +66,23 @@ describe('ResumeAiService - validateResumeContent', () => {
           useValue: mockResumeModel,
         },
         {
-          provide: 'AiService',
+          provide: 'ResumeEditRecordModel',
+          useValue: mockEditRecordModel,
+        },
+        {
+          provide: 'ResumeAnalysisRecordModel',
+          useValue: mockAnalysisRecordModel,
+        },
+        {
+          provide: 'AiUsageRecordModel',
+          useValue: mockAiUsageRecordModel,
+        },
+        {
+          provide: AiService,
           useValue: mockAiService,
         },
         {
-          provide: 'DocumentParserService',
+          provide: DocumentParserService,
           useValue: mockDocumentParserService,
         },
       ],
@@ -374,6 +410,125 @@ describe('ResumeAiService - validateResumeContent', () => {
         service['validateResumeContent'](resumeWithoutContact);
 
       expect(result.score).toBeGreaterThan(resultWithoutContact.score);
+    });
+  });
+
+  describe('analyzeResume 超时降级', () => {
+    const validJd = `Agent全栈开发工程师 - 数据平台
+上海、杭州
+正式
+研发 - 前端
+2027届校园招聘
+职位 ID：A103143
+职位描述
+团队介绍：数据平台是字节跳动数据中台部门，为公司多业务线（包括抖音、电商、直播和生活服务等）提供一站式大数据解决方案，涵盖数据的生产、清洗、传输、建模、分析等全流程链路，提供数据开发、实验评估、画像标签、增强分析等多元场景解决能力。同时，数据平台部门也致力于把字节跳动积累沉淀的数据中台解决方案做商业化输出，让更多行业能够应用我们的产品能力构建自己的数据中台。在火山引擎上，我们提供了营销增长套件，数据中台等相关产品解决方案，为泛互联网、金融、汽车、新零售等行业提供了行业解决方案。
+
+1、参与数据平台的前端产品与Agent应用的全栈研发，覆盖Web前端、Node/BFF、服务端接口与Agent Skill，编写高质量、可维护的代码；
+2、参与Agent能力及相关服务的建设，涉及Prompt Engineering、Workflow、Multi-Agent、Tool Calling等技术方向；
+3、结合数据分析、数据可视化等业务场景，参与Agent解决方案的设计与落地；
+4、持续进行性能优化和架构升级，支撑内部业务及商业化客户需求，不断提升团队效率和产品体验；
+5、跟踪大模型与Agent领域前沿技术，推动新技术在业务中的落地。
+
+职位要求
+1、2027届获得本科及以上学历，计算机、软件工程等相关专业优先；
+2、扎实的Web前端基础，熟悉HTML、CSS、JavaScript/TypeScript与HTTP协议，了解浏览器渲染与常见性能问题；
+3、具备工程能力与全栈潜力，熟悉常用数据结构与设计模式，掌握Python、Java、Go、Node.js中至少一种服务端语言，能够独立完成从前端到接口的小型闭环开发；
+4、学习能力强，喜欢钻研，工作积极主动，能够独立思考，具有良好的团队合作精神和沟通能力。
+
+加分项：
+1、对大模型与Agent有真实的动手经验，做过基于大模型API、Agent框架、Prompt/评测相关的项目；或者有数据产品相关项目经验。`;
+
+    const resumeDoc = {
+      _id: 'resume-1',
+      basicInfo: { name: '张三', phone: '13800138000' },
+      jobIntention: { position: '前端开发工程师' },
+      educationBackground: [{ school: '上海交通大学', degree: '本科' }],
+      workExperience: [],
+      projectExperience: [],
+      skills: ['Vue', 'TypeScript'],
+      certificates: [],
+      selfEvaluation: '',
+      campusExperience: [],
+      internshipExperience: [],
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      (mockResumeModel.findOne as jest.Mock).mockReturnValue({
+        lean: jest.fn().mockResolvedValue(resumeDoc),
+      });
+      (mockAnalysisRecordModel.create as jest.Mock).mockResolvedValue({
+        _id: 'record-1',
+      });
+      (mockAnalysisRecordModel.findOne as jest.Mock).mockResolvedValue(null);
+      (mockAnalysisRecordModel.updateMany as jest.Mock).mockResolvedValue({});
+      (
+        mockAnalysisRecordModel.findByIdAndUpdate as jest.Mock
+      ).mockResolvedValue({});
+      (mockAiUsageRecordModel.create as jest.Mock).mockResolvedValue({});
+      jest.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+    });
+
+    it('第一次调用超时后，第二次使用 disabled 模式并成功返回', async () => {
+      jest.useFakeTimers();
+      try {
+        const timeoutModel = RunnableLambda.from(
+          async (_input: any, config?: any) => {
+            await new Promise<never>((_resolve, reject) => {
+              const signal = config?.signal;
+              if (!signal) {
+                reject(new Error('缺少 abort signal'));
+                return;
+              }
+              signal.addEventListener(
+                'abort',
+                () => {
+                  reject(
+                    Object.assign(new Error('AI分析超时'), {
+                      name: 'AbortError',
+                    }),
+                  );
+                },
+                { once: true },
+              );
+            });
+          },
+        );
+        const okModel = RunnableLambda.from(async () =>
+          JSON.stringify({ overall_score: 70, summary: '整体匹配度良好' }),
+        );
+        const generateAnalyzeResume = jest
+          .fn()
+          .mockReturnValueOnce(timeoutModel)
+          .mockReturnValueOnce(okModel);
+        const robustParser = RunnableLambda.from(async (text: string) =>
+          JSON.parse(text),
+        );
+
+        mockAiService.generateAnalyzeResume = generateAnalyzeResume;
+        mockAiService.createRobustStructuredParser = jest
+          .fn()
+          .mockReturnValue(robustParser);
+
+        const analyzing = service.analyzeResume(
+          { resumeId: 'resume-1', jobDescription: validJd },
+          'user-1',
+        );
+        await jest.advanceTimersByTimeAsync(ANALYSIS_TIMEOUT_MS + 10);
+        const result = await analyzing;
+
+        expect(generateAnalyzeResume).toHaveBeenCalledTimes(2);
+        expect(generateAnalyzeResume.mock.calls[0]).toEqual([]);
+        expect(generateAnalyzeResume.mock.calls[1]).toEqual(['disabled']);
+        expect(mockAnalysisRecordModel.findByIdAndUpdate).toHaveBeenCalledWith(
+          'record-1',
+          expect.objectContaining({ status: 'completed' }),
+        );
+        expect(result.analysisResult.overall_score).toBe(70);
+        expect(result.analysisResult.summary).toBe('整体匹配度良好');
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });

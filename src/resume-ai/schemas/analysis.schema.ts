@@ -33,6 +33,7 @@ export const AnalysisSchema = z
           .object({
             category: z.string().optional(),
             title: z.string().optional(),
+            description: z.string().optional(),
             detail: z.string().optional(),
           })
           .passthrough(),
@@ -45,6 +46,7 @@ export const AnalysisSchema = z
             category: z.string().optional(),
             title: z.string().optional(),
             severity: z.string().optional(),
+            suggestion: z.string().optional(),
             detail: z.string().optional(),
             improvement: z.string().optional(),
           })
@@ -61,6 +63,8 @@ export const AnalysisSchema = z
             detail: z.string().optional(),
             effort_estimate: z.string().optional(),
             expected_impact: z.string().optional(),
+            action: z.string().optional(),
+            timeline: z.string().optional(),
           })
           .passthrough(),
       )
@@ -71,6 +75,10 @@ export const AnalysisSchema = z
         salary_range: z.string().optional(),
         demand_level: z.string().optional(),
         summary: z.string().optional(),
+        position_demand: z.string().optional(),
+        competition_intensity: z.string().optional(),
+        candidate_positioning: z.string().optional(),
+        salary_competitiveness_note: z.string().optional(),
       })
       .passthrough()
       .optional(),
@@ -79,8 +87,35 @@ export const AnalysisSchema = z
         core_strengths: z.array(z.string()).optional(),
         gaps: z.array(z.string()).optional(),
         recommendations: z.array(z.string()).optional(),
+        tech_stack_score: z.number().min(0).max(100).optional(),
+        tech_stack_summary: z.string().optional(),
+        matching_skills: z.array(z.string()).optional(),
+        missing_critical_skills: z.array(z.string()).optional(),
+        trending_skills_advantage: z.array(z.string()).optional(),
+        outdated_or_risk_skills: z.array(z.string()).optional(),
       })
       .passthrough()
+      .optional(),
+    career_analysis: z
+      .object({
+        career_stage: z.string().optional(),
+        trajectory_assessment: z.string().optional(),
+        growth_rate: z.string().optional(),
+        red_flags: z.array(z.string()).optional(),
+        estimated_work_years: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    key_findings: z
+      .array(
+        z
+          .object({
+            severity: z.string().optional(),
+            finding: z.string().optional(),
+            detail: z.string().optional(),
+          })
+          .passthrough(),
+      )
       .optional(),
     summary: z.string().optional(),
   })

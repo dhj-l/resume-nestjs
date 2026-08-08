@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DeepSeekProps } from './type';
+import { DeepSeekProps, DeepSeekThinkingMode } from './type';
 import { ChatDeepSeek } from '@langchain/deepseek';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
+import { RunnableLambda } from '@langchain/core/runnables';
+import type { BaseMessage } from '@langchain/core/messages';
 import type { ZodSchema } from 'zod';
 
 @Injectable()
@@ -17,12 +19,25 @@ export class AiService {
       apiKey,
       maxTokens = 30000,
       temperature = 0.5,
+      thinking,
+      reasoningEffort,
     } = props;
+
+    const modelKwargs: Record<string, unknown> = {};
+    if (thinking === 'disabled') {
+      modelKwargs.thinking = { type: 'disabled' };
+    } else if (thinking === 'enabled' && reasoningEffort) {
+      modelKwargs.thinking = { type: 'enabled' };
+      modelKwargs.reasoning_effort = reasoningEffort;
+    }
+
     const chat = new ChatDeepSeek({
       model,
       apiKey,
       maxTokens,
       temperature,
+      modelKwargs:
+        Object.keys(modelKwargs).length > 0 ? modelKwargs : undefined,
     });
     return chat;
   }
@@ -51,13 +66,18 @@ export class AiService {
 
   /**
    * 简历分析AI模型（低温 + 大 token 上限，适应复杂分析输出）
+   * @param mode 思考模式：disabled | low | medium | high，默认读取
+   * DEEPSEEK_THINKING_MODE（默认 low）
    */
-  generateAnalyzeResume() {
+  generateAnalyzeResume(mode?: DeepSeekThinkingMode) {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const thinkingMode = mode ?? this.resolveThinkingMode();
     const chat = this.createDefaultDeepSeek({
       apiKey,
       temperature: 0.1,
       maxTokens: 36384,
+      thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
+      reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
     });
     return chat;
   }
@@ -83,4 +103,69 @@ export class AiService {
   createStructuredParser<T extends ZodSchema>(schema: T) {
     return StructuredOutputParser.fromZodSchema(schema);
   }
+
+  /**
+   * 创建稳健的结构化输出解析器
+   *
+   * 直接解析失败时依次尝试：剥离 markdown 代码块 → 截取首尾 {...}，
+   * 最后再交给 Zod 校验，降低模型输出带杂文/代码围栏导致的解析失败。
+   */
+  createRobustStructuredParser<T extends ZodSchema>(schema: T) {
+    const zodParser = StructuredOutputParser.fromZodSchema(schema);
+    return RunnableLambda.from(async (message: BaseMessage) => {
+      const text = extractJsonText(extractMessageContent(message));
+      return zodParser.parse(text);
+    });
+  }
+
+  private resolveThinkingMode(): DeepSeekThinkingMode {
+    const configured = this.config.get<string>('DEEPSEEK_THINKING_MODE', 'low');
+    if (
+      configured === 'disabled' ||
+      configured === 'low' ||
+      configured === 'medium' ||
+      configured === 'high'
+    ) {
+      return configured;
+    }
+    return 'low';
+  }
+}
+
+function extractMessageContent(message: BaseMessage): string {
+  if (typeof message.content === 'string') {
+    return message.content;
+  }
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
+      .join('');
+  }
+  return JSON.stringify(message.content ?? '');
+}
+
+function extractJsonText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error('AI 返回内容为空');
+  }
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    return trimmed;
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    const fencedText = fenced[1].trim();
+    if (fencedText.startsWith('{') && fencedText.endsWith('}')) {
+      return fencedText;
+    }
+  }
+
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    return trimmed.slice(start, end + 1);
+  }
+
+  return trimmed;
 }
