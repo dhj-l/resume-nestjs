@@ -424,6 +424,7 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
           'title',
           'cover',
           'isTemplate',
+          'aiStatus',
           'createdAt',
           'updatedAt',
         ])

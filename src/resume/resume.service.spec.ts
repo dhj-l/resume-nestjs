@@ -671,3 +671,58 @@ describe('ResumeService — 管理员方法', () => {
     });
   });
 });
+
+/* ------------------------------------------------------------------ */
+/*  ResumeService — 用户简历列表 findAll                                */
+/* ------------------------------------------------------------------ */
+
+describe('ResumeService — 用户简历列表 findAll', () => {
+  let service: ResumeService;
+  let chainObj: any;
+
+  beforeEach(async () => {
+    chainObj = {
+      select: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+
+    const mockResumeModel = {
+      find: jest.fn().mockReturnValue(chainObj),
+      countDocuments: jest.fn().mockResolvedValue(2),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ResumeService,
+        { provide: getModelToken('Resume'), useValue: mockResumeModel },
+        { provide: getModelToken('Template'), useValue: buildMockModel() },
+        { provide: getModelToken('ResumeAi'), useValue: {} },
+        { provide: getModelToken('ResumeEditRecord'), useValue: {} },
+        { provide: getModelToken('ResumeAnalysisRecord'), useValue: {} },
+      ],
+    }).compile();
+
+    service = module.get<ResumeService>(ResumeService);
+  });
+
+  it('应返回分页列表并包含 aiStatus 字段', async () => {
+    const list = [
+      { _id: 'r1', title: '张三-前端', aiStatus: 'generating', userId: 'u1' },
+      { _id: 'r2', title: '李四-后端', aiStatus: '', userId: 'u1' },
+    ];
+    chainObj.exec.mockResolvedValue(list);
+
+    const result = await service.findAll('u1', { page: 1, pageSize: 6 });
+
+    expect(result.list).toEqual(list);
+    expect(result.total).toBe(2);
+    expect(chainObj.select).toHaveBeenCalledWith(
+      expect.arrayContaining(['aiStatus', '_id', 'title']),
+    );
+    expect(chainObj.skip).toHaveBeenCalledWith(0);
+    expect(chainObj.limit).toHaveBeenCalledWith(6);
+  });
+});
