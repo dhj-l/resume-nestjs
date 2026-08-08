@@ -1,4 +1,4 @@
-import { IsString, MinLength, Matches, IsNotEmpty } from 'class-validator';
+import { IsString, MinLength, IsNotEmpty } from 'class-validator';
 
 /**
  * 修改密码 DTO

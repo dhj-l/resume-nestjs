@@ -24,6 +24,10 @@ export interface SseMessage {
   currentModule: number;
   /** 数据库记录ID（仅在初始化时返回） */
   recordId?: string;
+  /** 生成的简历ID（仅在 complete 消息中返回） */
+  resumeId?: string;
+  /** 模块生成的数据（completed progress / init 后模块帧携带） */
+  data?: any;
 }
 
 /**

@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { type Response } from 'express';
+import { Observable } from 'rxjs';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
@@ -71,63 +72,66 @@ export class ResumeAiController {
     @Req() req: any,
     @Res() res: Response,
   ): void {
+    const { userId } = req.user;
+
+    // 先获取 SSE Observable：JD 校验失败等会同步抛错。
+    // 此时尚未设置 SSE 响应头，异常交由全局过滤器按标准 JSON 错误格式返回，
+    // 避免以 text/event-stream 头返回 JSON 错误体。
+    let sseObservable: Observable<SseMessage>;
     try {
-      const { userId } = req.user;
-
-      // 设置SSE响应头
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('X-Accel-Buffering', 'no');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-
-      // 获取SSE Observable
-      const sseObservable = this.resumeAiService.generateResumeSse(
+      sseObservable = this.resumeAiService.generateResumeSse(
         createAiResuemDto,
         userId,
       );
-
-      // 订阅SSE消息流
-      const subscription = sseObservable.subscribe({
-        next: (message: SseMessage) => {
-          // 将SSE消息格式化为SSE格式
-          const sseData = `data: ${JSON.stringify(message)}\n\n`;
-          res.write(sseData);
-        },
-        error: (error: Error) => {
-          this.logger.error('SSE错误', error.stack);
-          const errorMessage: SseMessage = {
-            type: 'error',
-            moduleName: 'system',
-            status: 'failed',
-            message: error.message || '连接错误',
-            totalModules: 0,
-            currentModule: 0,
-          };
-          res.write(`data: ${JSON.stringify(errorMessage)}\n\n`);
-          res.end();
-        },
-        complete: () => {
-          res.end();
-        },
-      });
-
-      // 处理客户端断开连接
-      req.on('close', () => {
-        subscription.unsubscribe();
-        res.end();
-      });
-
-      // 处理连接错误
-      req.on('error', (error: Error) => {
-        this.logger.error('连接错误', error.stack);
-        subscription.unsubscribe();
-        res.end();
-      });
     } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
       this.logger.error('SSE初始化错误', error.stack);
-      throw new BadRequestException(error.message);
+      throw new InternalServerErrorException('服务器内部错误');
     }
+
+    // 成功后再设置 SSE 响应头（CORS 由全局配置统一处理，不在此手动设置）
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    // 订阅SSE消息流
+    const subscription = sseObservable.subscribe({
+      next: (message: SseMessage) => {
+        // 将SSE消息格式化为SSE格式
+        const sseData = `data: ${JSON.stringify(message)}\n\n`;
+        res.write(sseData);
+      },
+      error: (error: Error) => {
+        this.logger.error('SSE错误', error.stack);
+        const errorMessage: SseMessage = {
+          type: 'error',
+          moduleName: 'system',
+          status: 'failed',
+          message: error.message || '连接错误',
+          totalModules: 0,
+          currentModule: 0,
+        };
+        res.write(`data: ${JSON.stringify(errorMessage)}\n\n`);
+        res.end();
+      },
+      complete: () => {
+        res.end();
+      },
+    });
+
+    // 处理客户端断开连接
+    req.on('close', () => {
+      subscription.unsubscribe();
+      res.end();
+    });
+
+    // 处理连接错误
+    req.on('error', (error: Error) => {
+      this.logger.error('连接错误', error.stack);
+      subscription.unsubscribe();
+      res.end();
+    });
   }
 
   /**

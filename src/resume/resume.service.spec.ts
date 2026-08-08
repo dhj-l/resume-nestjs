@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException } from '@nestjs/common';
 import { ResumeService } from './resume.service';
-import { readFileSync } from 'fs';
 
 /* ------------------------------------------------------------------ */
 /*  Puppeteer mock                                                    */
@@ -96,7 +95,7 @@ describe('ResumeService — Puppeteer 浏览器生命周期', () => {
   let puppeteer: any;
 
   beforeAll(async () => {
-    puppeteer = require('puppeteer');
+    puppeteer = require('puppeteer'); // eslint-disable-line @typescript-eslint/no-require-imports
   });
 
   beforeEach(async () => {

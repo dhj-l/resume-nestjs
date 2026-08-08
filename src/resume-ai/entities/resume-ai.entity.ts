@@ -129,6 +129,11 @@ export class ResumeAi {
    */
   @Prop({ type: SchemaTypes.ObjectId, ref: 'User' })
   userId: Types.ObjectId;
+  /**
+   * 本次生成所选模块（缺省/空数组表示全部模块）
+   */
+  @Prop({ type: [String], default: [] })
+  modules?: string[];
 }
 
 export const ResumeAiSchema = SchemaFactory.createForClass(ResumeAi);

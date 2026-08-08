@@ -149,7 +149,7 @@ export class DocumentParserService {
         .replace(/\r\n/g, '\n')
         .replace(/\r/g, '\n')
         // 移除控制字符（保留换行\n和普通空格）
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '') // eslint-disable-line no-control-regex
         // 合并连续空行为最多两个换行
         .replace(/\n{3,}/g, '\n\n')
         // 每行内部：合并多个空格为单个空格，去除首尾空格

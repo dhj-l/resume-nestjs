@@ -23,7 +23,7 @@ export class AiService {
       reasoningEffort,
     } = props;
 
-    const modelKwargs: Record<string, unknown> = {};
+    const modelKwargs: Record<string, unknown> = { ...props.modelKwargs };
     if (thinking === 'disabled') {
       modelKwargs.thinking = { type: 'disabled' };
     } else if (thinking === 'enabled' && reasoningEffort) {
@@ -47,7 +47,12 @@ export class AiService {
    */
   generateResume() {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
-    const chat = this.createDefaultDeepSeek({ apiKey });
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
     return chat;
   }
 
@@ -83,12 +88,12 @@ export class AiService {
   }
 
   /**
-   * 简历生成AI模型(深度思考版)
+   * 简历生成AI模型
    */
   generateResumeDeepSeek() {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
     const chat = this.createDefaultDeepSeek({
-      model: 'deepseek-reasoner',
+      model: 'deepseek-chat',
       apiKey,
     });
     return chat;

@@ -65,7 +65,7 @@ const DEFAULT_PARAMS = {
 };
 
 /** 模拟已有用户文档数据 */
-function existingUserDoc(overrides: Record<string, unknown> = {}) {
+function existingUserDoc(_overrides: Record<string, unknown> = {}) {
   return {
     _id: 'user-existing-1',
     email: 'zhangsan@example.com',

@@ -147,7 +147,7 @@ Google
 
   describe('parsePdf', () => {
     it('should parse pdf and return text', async () => {
-      const { PDFParse } = require('pdf-parse');
+      const { PDFParse } = require('pdf-parse'); // eslint-disable-line @typescript-eslint/no-require-imports
       const result = await service.parsePdf('https://example.com/test.pdf');
       expect(result).toBe('mocked pdf text');
       expect(PDFParse).toHaveBeenCalledWith({
@@ -158,7 +158,7 @@ Google
 
     it('should call destroy after parsing', async () => {
       const mockDestroy = jest.fn().mockResolvedValue(undefined);
-      const { PDFParse } = require('pdf-parse');
+      const { PDFParse } = require('pdf-parse'); // eslint-disable-line @typescript-eslint/no-require-imports
       PDFParse.mockImplementation(() => ({
         getText: jest.fn().mockResolvedValue({ text: 'text' }),
         destroy: mockDestroy,
@@ -170,7 +170,7 @@ Google
 
     it('should call destroy even if getText fails', async () => {
       const mockDestroy = jest.fn().mockResolvedValue(undefined);
-      const { PDFParse } = require('pdf-parse');
+      const { PDFParse } = require('pdf-parse'); // eslint-disable-line @typescript-eslint/no-require-imports
       PDFParse.mockImplementation(() => ({
         getText: jest.fn().mockRejectedValue(new Error('parse error')),
         destroy: mockDestroy,
@@ -184,7 +184,7 @@ Google
 
     it('should pass correct ParseParameters', async () => {
       const mockGetText = jest.fn().mockResolvedValue({ text: 'text' });
-      const { PDFParse } = require('pdf-parse');
+      const { PDFParse } = require('pdf-parse'); // eslint-disable-line @typescript-eslint/no-require-imports
       PDFParse.mockImplementation(() => ({
         getText: mockGetText,
         destroy: jest.fn().mockResolvedValue(undefined),

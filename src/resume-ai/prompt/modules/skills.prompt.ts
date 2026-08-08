@@ -1,5 +1,4 @@
 import {
-  commonJsonConstraints,
   commonHtmlRules,
   commonEnhancementStrategy,
 } from '../common-constraints';
@@ -11,7 +10,7 @@ export const skillsPrompt = `
 你是一位资深的简历优化顾问，专门负责生成简历的技能模块。
 
 任务目标
-根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的skills模块JSON数据。输出必须严格遵循JSON格式，字段结构必须与下方给定的示例完全一致。
+根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的skills模块JSON数据（仅包含 skills 字段，结构必须与下方示例一致）。
 
 输入信息
 职位描述（JD）：{jd}
@@ -19,11 +18,6 @@ export const skillsPrompt = `
 候选人原始经历：{experience}
 
 当前日期：{current_date}
-
-输出格式要求
-输出必须是单一且有效的 JSON 对象，仅包含 skills 字段，不得包含任何额外的解释、注释、Markdown 代码块或其他文本。
-
-${commonJsonConstraints}
 
 JSON 结构示例
 {{
@@ -52,14 +46,4 @@ ${commonHtmlRules}
 
 ${commonEnhancementStrategy}
 
-输出格式最终校验
-要求模型在生成 JSON 内容前进行自我校验：
-1. 确认 content 字段使用 \`<ul><li>\` 结构
-2. 检查是否存在超过 80 字符的长文本行；若存在，必须立即拆分为多个平级 \`<li>\`
-3. 确认已为技能添加熟练度修饰词
-4. 确认核心技能已使用 \`<strong>\` 标记
-5. 确认技能按与 JD 的相关性降序排列
-6. 若检测到非列表长字符串，立即重新生成
-
-返回纯 JSON。
 `;

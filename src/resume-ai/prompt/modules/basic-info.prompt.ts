@@ -1,5 +1,3 @@
-import { commonJsonConstraints } from '../common-constraints';
-
 /**
  * 基本信息（basicInfo）模块prompt
  */
@@ -7,7 +5,7 @@ export const basicInfoPrompt = `
 你是一位资深的简历优化顾问，专门负责生成简历的基本信息模块。
 
 任务目标
-根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的basicInfo模块JSON数据。输出必须严格遵循JSON格式，字段结构必须与下方给定的示例完全一致。
+根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的basicInfo模块JSON数据（仅包含 basicInfo 字段，结构必须与下方示例一致）。
 
 输入信息
 职位描述（JD）：{jd}
@@ -15,11 +13,6 @@ export const basicInfoPrompt = `
 候选人原始经历：{experience}
 
 当前日期：{current_date}
-
-输出格式要求
-输出必须是单一且有效的 JSON 对象，仅包含 basicInfo 字段，不得包含任何额外的解释、注释、Markdown 代码块或其他文本。
-
-${commonJsonConstraints}
 
 JSON 结构示例
 {{
@@ -80,12 +73,4 @@ JSON 结构示例
 - 占位符优先级：仅在经历完全缺失对应信息时使用占位符；若经历中已有部分信息（如姓名），必须使用真实信息，不得用占位符覆盖
 - 日期计算：年龄需根据教育经历和当前日期{current_date}准确计算
 
-输出格式最终校验
-要求模型在生成 JSON 内容前进行自我校验：
-1. 确认所有字段均已填充（无遗漏）
-2. 确认字段类型与模板一致
-3. 确认 workYear 根据实际情况正确计算
-4. 确认 avatar 字段处理正确
-
-返回纯 JSON。
 `;

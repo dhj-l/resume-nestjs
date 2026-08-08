@@ -135,3 +135,22 @@ export const MODULE_PROMPTS = {
  * 从MODULE_PROMPTS中提取所有模块名称
  */
 export type ModuleName = keyof typeof MODULE_PROMPTS;
+
+/**
+ * 各模块的空默认值（单一来源）
+ * 部分模块生成时，未生成的模块用该默认值补齐，保证聚合结果可通过 ResumeSchema 校验。
+ * basicInfo 使用 { name: '' } 是因为 ResumeSchema 中 name 为必填字符串。
+ */
+export const MODULE_DEFAULTS: Record<ModuleName, unknown> = {
+  basicInfo: { name: '' },
+  jobIntention: {},
+  globalStyle: {},
+  skills: {},
+  certificates: {},
+  selfEvaluation: {},
+  educationBackground: [],
+  workExperience: [],
+  projectExperience: [],
+  campusExperience: [],
+  internshipExperience: [],
+};

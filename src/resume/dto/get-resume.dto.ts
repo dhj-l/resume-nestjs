@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, Min, Max } from 'class-validator';
+import { IsOptional } from 'class-validator';
 
 /**
  * 查询简历列表 DTO

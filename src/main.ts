@@ -16,7 +16,7 @@ import { winstonLogger } from './common/logger/winston.config';
 function bridgeLoggerToWinston() {
   const levels = ['log', 'error', 'warn', 'debug', 'verbose'] as const;
   for (const level of levels) {
-    const orig = (Logger.prototype as any)[level] as Function;
+    const orig = (Logger.prototype as any)[level] as (...args: any[]) => any;
     const winstonLevel = level === 'log' ? 'info' : level;
 
     (Logger.prototype as any)[level] = function (
@@ -27,7 +27,9 @@ function bridgeLoggerToWinston() {
       orig.call(this, message, ...optionalParams);
 
       // 写文件（携带 context 元数据）
-      const winstonMethod = (winstonLogger as any)[winstonLevel] as Function;
+      const winstonMethod = (winstonLogger as any)[winstonLevel] as (
+        ...args: any[]
+      ) => any;
       const meta: Record<string, unknown> = {};
       if (this.context) meta.context = this.context;
       // error 特有：第二个参数可能是 stack trace

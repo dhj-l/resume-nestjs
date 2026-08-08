@@ -55,7 +55,12 @@ import {
   RetryConfig,
   HeartbeatConfig,
 } from './types/sse.types';
-import { MODULE_PROMPTS, MODULE_EXECUTION_ORDER } from './prompt/modules';
+import {
+  MODULE_PROMPTS,
+  MODULE_EXECUTION_ORDER,
+  MODULE_DEFAULTS,
+  ModuleName,
+} from './prompt/modules';
 import { GetResumeRecordsDto } from './dto/get-resume-record.dto';
 import { ResumeEditRecord } from './entities/resume-edit-record.entity';
 import { toResumeRecordResponse } from './resume-records.mapper';
@@ -473,15 +478,119 @@ export class ResumeAiService {
    * @param resume 简历信息
    * @param type 简历模板类型
    * @param userId 用户 ID
+   * @param aiStatus AI 生成状态（AI 草稿使用，普通创建不传）
    */
-  async createResume(resume: CreateResumeDto, type: string, userId: string) {
+  async createResume(
+    resume: CreateResumeDto,
+    type: string,
+    userId: string,
+    aiStatus?: string,
+  ) {
     const res = await this.resumeModel.create({
       ...resume,
       type,
       userId,
       user: new Types.ObjectId(userId),
+      ...(aiStatus ? { aiStatus } : {}),
     });
     return res;
+  }
+
+  /**
+   * 构造草稿初始数据
+   * Select 场景继承原简历模块字段；其余场景使用 MODULE_DEFAULTS
+   */
+  private buildDraftData(
+    source?: Record<string, any>,
+  ): Record<string, unknown> {
+    const defaults = { ...MODULE_DEFAULTS };
+    if (!source) {
+      return defaults;
+    }
+    const {
+      _id,
+      _userId,
+      _user,
+      _createdAt,
+      _updatedAt,
+      __v,
+      _isTemplate,
+      _cover,
+      _title,
+      _type,
+      _aiStatus,
+      ...moduleData
+    } = source;
+    return { ...defaults, ...moduleData };
+  }
+
+  /**
+   * 模块生成后增量写入草稿（失败仅告警，不阻断主流程）
+   */
+  private async updateDraftModule(
+    resumeId: string,
+    moduleName: string,
+    data: any,
+  ): Promise<void> {
+    try {
+      await this.resumeModel.findByIdAndUpdate(resumeId, {
+        $set: { [moduleName]: data },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `草稿模块落库失败: ${moduleName}`,
+        (error as Error).message,
+      );
+    }
+  }
+
+  /**
+   * 组装 AI 生成简历标题：用户名-岗位名称
+   * Manual 用 detailInfo；Select 继承原简历基本信息/求职意向；
+   * Upload 从简历文本提取；无法提取时回退为 "AI 生成简历"。
+   */
+  private buildAiResumeTitle(
+    createAiResuemDto: CreateAiResuemDto,
+    source?: Record<string, any>,
+  ): string {
+    let name = '';
+    let role = '';
+
+    if (createAiResuemDto.parseType === ResumeAiTypeEnum.Manual) {
+      name = createAiResuemDto.detailInfo?.name?.trim() ?? '';
+      role = createAiResuemDto.detailInfo?.targetRole?.trim() ?? '';
+    } else if (createAiResuemDto.parseType === ResumeAiTypeEnum.Select) {
+      const jobIntention = source?.jobIntention ?? {};
+      name = source?.basicInfo?.name?.trim() ?? '';
+      role =
+        jobIntention.jobIntention?.trim() ??
+        jobIntention.position?.trim() ??
+        '';
+    } else if (createAiResuemDto.parseType === ResumeAiTypeEnum.Upload) {
+      const resumeContent = createAiResuemDto.resumeContent ?? '';
+      name = this.extractFieldFromText(resumeContent, ['姓名']);
+      role = this.extractFieldFromText(resumeContent, ['求职意向', '意向岗位']);
+    }
+
+    if (!name && !role) {
+      return 'AI 生成简历';
+    }
+    return [name, role].filter(Boolean).join('-');
+  }
+
+  /**
+   * 从简历文本中提取标签后的字段值（截断到换行/逗号/竖线等分隔符）
+   */
+  private extractFieldFromText(text: string, labels: string[]): string {
+    for (const label of labels) {
+      const match = text.match(
+        new RegExp(`${label}[\\s:：]*([^|\\n\\r，,。；;]+)`),
+      );
+      if (match?.[1]) {
+        return match[1].trim();
+      }
+    }
+    return '';
   }
 
   /**
@@ -866,6 +975,13 @@ export class ResumeAiService {
       throw new BadRequestException(reason);
     }
 
+    // 解析本次需要生成的模块（缺省/空数组 = 全部；非法 key 过滤）
+    // Select 场景未选模块可从原简历继承，不做依赖补全，保持用户选择
+    const modules = this.resolveModules(
+      createAiResuemDto.modules,
+      createAiResuemDto.parseType === ResumeAiTypeEnum.Select,
+    );
+
     // 创建SSE消息Subject
     const sseSubject = new Subject<SseMessage>();
     const stopSignal = new Subject<void>();
@@ -892,6 +1008,7 @@ export class ResumeAiService {
       sseSubject,
       stopSignal,
       retryConfig,
+      modules,
     ).catch((error: any) => {
       // 发送错误消息
       const errorMessage: SseMessage = {
@@ -899,8 +1016,9 @@ export class ResumeAiService {
         moduleName: 'system',
         status: 'failed',
         message: error?.message || '简历生成失败',
-        totalModules: MODULE_EXECUTION_ORDER.length,
+        totalModules: modules.length,
         currentModule: 0,
+        resumeId: error?.resumeId,
       };
       sseSubject.next(errorMessage);
       sseSubject.error(error);
@@ -926,10 +1044,12 @@ export class ResumeAiService {
     sseSubject: Subject<SseMessage>,
     stopSignal: Subject<void>,
     retryConfig: RetryConfig,
+    modules: string[],
   ): Promise<void> {
     const { parseType, jobDescription } = createAiResuemDto;
 
-    // 获取简历内容
+    // 获取简历内容；Select 场景保留原简历，用于未选模块数据继承
+    let sourceResume: Record<string, any> | undefined;
     let resumeContent = '';
     switch (parseType) {
       case ResumeAiTypeEnum.Manual: {
@@ -948,7 +1068,8 @@ export class ResumeAiService {
         if (!resume) {
           throw new BadRequestException('不存在该简历');
         }
-        resumeContent = this.parseSupplementary(resume.toObject());
+        sourceResume = resume.toObject();
+        resumeContent = this.parseSupplementary(sourceResume);
         break;
       }
       default:
@@ -968,36 +1089,52 @@ export class ResumeAiService {
     });
 
     const aiStartTime = Date.now();
+    let resumeId: string | undefined;
+
     try {
-      // 执行所有模块
-      const moduleResults = await this.executeAllModules(
+      // 草稿先行：生成开始前创建简历草稿，前端可立即进入编辑页
+      const draftData = {
+        ...this.buildDraftData(sourceResume),
+        title: this.buildAiResumeTitle(createAiResuemDto, sourceResume),
+      };
+      const draft = await this.createResume(
+        draftData as CreateResumeDto,
+        record.templateType,
+        userId,
+        'generating',
+      );
+      resumeId = draft._id.toString();
+
+      // 保存生成的简历ID（草稿）
+      record.generatedResumeId = resumeId;
+      await record.save();
+
+      // 推送 init 消息，前端据此跳转编辑页
+      this.sendInit(sseSubject, modules.length, resumeId);
+
+      // 执行所选模块（完成后逐模块推送数据并增量落库）
+      await this.executeAllModules(
         jobDescription,
         resumeContent,
         sseSubject,
         retryConfig,
+        modules,
+        resumeId,
       );
 
-      // 聚合结果
-      const aggregatedResult = this.aggregateModuleResults(moduleResults);
-
-      // Zod 结构校验：确保聚合结果符合 ResumeSchema
-      const parsed = ResumeSchema.safeParse(aggregatedResult);
+      // 最终草稿结构校验（仅告警，不阻断）
+      const finalDraft = await this.resumeModel.findById(resumeId).lean();
+      const parsed = ResumeSchema.safeParse(finalDraft ?? draftData);
       if (!parsed.success) {
         this.logger.warn(
-          `SSE 聚合结果 Zod 校验失败: ${parsed.error.message}，将使用原始数据继续`,
+          `SSE 草稿最终校验失败: ${parsed.error.message}，继续完成`,
         );
       }
 
-      // 创建简历
-      const resume = await this.createResume(
-        (parsed.success ? parsed.data : aggregatedResult) as CreateResumeDto,
-        record.templateType,
-        userId,
-      );
-
-      // 保存生成的简历ID
-      record.generatedResumeId = resume._id.toString();
-      await record.save();
+      // 标记草稿完成
+      await this.resumeModel.findByIdAndUpdate(resumeId, {
+        $set: { aiStatus: 'completed' },
+      });
 
       // 更新记录状态
       await this.updateRecordStatus(
@@ -1010,21 +1147,12 @@ export class ResumeAiService {
         aiFunction: AiFunctionEnum.ResumeGeneration,
         success: true,
         duration: Date.now() - aiStartTime,
-        resumeId: resume._id.toString(),
-        metadata: { parseType, moduleCount: MODULE_EXECUTION_ORDER.length },
+        resumeId,
+        metadata: { parseType, moduleCount: modules.length },
       });
 
-      // 发送完成消息
-      this.sendProgress(
-        sseSubject,
-        'complete',
-        'completed',
-        MODULE_EXECUTION_ORDER.length,
-        MODULE_EXECUTION_ORDER.length,
-        '简历生成完成',
-        0,
-        resume._id.toString(),
-      );
+      // 发送完成消息（type: 'complete'，携带 resumeId）
+      this.sendComplete(sseSubject, modules.length, modules.length, resumeId);
 
       // 关闭连接
       stopSignal.next();
@@ -1039,12 +1167,21 @@ export class ResumeAiService {
         errorMessage: error.message,
         metadata: { parseType },
       });
+      // 标记草稿失败（保留已生成模块）
+      if (resumeId) {
+        await this.resumeModel
+          .findByIdAndUpdate(resumeId, { $set: { aiStatus: 'failed' } })
+          .catch((err) =>
+            this.logger.warn('标记草稿失败状态异常', (err as Error).message),
+          );
+      }
       // 更新记录状态为失败
       await this.updateRecordStatus(
         record._id.toString(),
         ResumeAiStatusEnum.Failed,
       );
-      throw error;
+      // 携带 resumeId 供外层 error 消息使用
+      throw Object.assign(error, { resumeId });
     }
   }
 
@@ -1056,12 +1193,16 @@ export class ResumeAiService {
     resumeContent: string,
     sseSubject: Subject<SseMessage>,
     retryConfig: RetryConfig,
+    modules: string[],
+    resumeId: string,
   ): Promise<ModuleResult[]> {
     const results: ModuleResult[] = [];
     const current = formatDate();
+    const moduleLabelMap = new Map(MODULE_EXECUTION_ORDER);
 
-    for (let i = 0; i < MODULE_EXECUTION_ORDER.length; i++) {
-      const [moduleName, moduleLabel] = MODULE_EXECUTION_ORDER[i];
+    for (let i = 0; i < modules.length; i++) {
+      const moduleName = modules[i] as ModuleName;
+      const moduleLabel = moduleLabelMap.get(moduleName) ?? moduleName;
       const moduleConfig = MODULE_PROMPTS[moduleName];
 
       // 发送开始处理消息
@@ -1070,7 +1211,7 @@ export class ResumeAiService {
         moduleName,
         'processing',
         i + 1,
-        MODULE_EXECUTION_ORDER.length,
+        modules.length,
         `正在处理${moduleLabel}模块`,
       );
 
@@ -1089,14 +1230,21 @@ export class ResumeAiService {
 
       // 发送完成消息
       if (result.success) {
+        // AI 返回的模块 JSON 通常自带模块 key（如 { workExperience: [...] }），
+        // 解包后推送/落库，与简历字段结构保持一致
+        const moduleData = result.data?.[moduleName] ?? result.data;
         this.sendProgress(
           sseSubject,
           moduleName,
           'completed',
           i + 1,
-          MODULE_EXECUTION_ORDER.length,
+          modules.length,
           `${moduleName}模块处理完成`,
+          undefined,
+          resumeId,
+          moduleData,
         );
+        await this.updateDraftModule(resumeId, moduleName, moduleData);
       } else {
         throw new BadRequestException(
           `模块${moduleName}执行失败: ${result.error}`,
@@ -1225,19 +1373,60 @@ export class ResumeAiService {
   }
 
   /**
-   * 聚合所有模块结果
+   * 解析本次需要生成的模块列表
+   * 缺省或空数组时默认全部模块；非法 key 静默过滤；过滤后为空则抛错。
+   * 结果顺序固定为后端模块执行顺序，不随入参顺序变化。
+   *
+   * Upload/Manual 场景（inheritUnselected=false）没有原简历可继承，
+   * 会按 MODULE_PROMPTS 声明的依赖做传递闭包补全，并始终包含 basicInfo，
+   * 保证聚合结果满足 ResumeSchema；
+   * Select 场景（inheritUnselected=true）未选模块数据从原简历继承，保持用户选择不变。
    */
-  private aggregateModuleResults(moduleResults: ModuleResult[]): any {
-    const aggregated: any = {};
+  private resolveModules(
+    modules?: string[],
+    inheritUnselected = false,
+  ): string[] {
+    const allModuleKeys = MODULE_EXECUTION_ORDER.map(([name]) => name);
+    if (!modules || modules.length === 0) {
+      return [...allModuleKeys];
+    }
 
-    for (const result of moduleResults) {
-      if (result.success && result.data) {
-        // 将模块数据添加到聚合对象中
-        Object.assign(aggregated, result.data);
+    const selected = new Set(modules);
+    let resolved: string[] = allModuleKeys.filter((name) => selected.has(name));
+    if (resolved.length === 0) {
+      throw new BadRequestException('至少选择一个有效的生成模块');
+    }
+    if (!inheritUnselected) {
+      resolved = this.withDependencies(resolved);
+    }
+    return resolved;
+  }
+
+  /**
+   * 按 MODULE_PROMPTS 声明的依赖做传递闭包补全，并始终包含 basicInfo
+   */
+  private withDependencies(selected: string[]): string[] {
+    const allModuleKeys = MODULE_EXECUTION_ORDER.map(([name]) => name);
+    const result = new Set(selected);
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const name of [...result]) {
+        const deps = MODULE_PROMPTS[name as ModuleName]?.dependencies ?? [];
+        for (const dep of deps) {
+          if (!result.has(dep)) {
+            result.add(dep);
+            changed = true;
+          }
+        }
       }
     }
 
-    return aggregated;
+    // ResumeSchema 中 basicInfo 为必填，生成新简历时始终包含
+    result.add('basicInfo');
+
+    return allModuleKeys.filter((name) => result.has(name));
   }
 
   /**
@@ -1251,7 +1440,8 @@ export class ResumeAiService {
     totalModules: number,
     message?: string,
     retryCount?: number,
-    recordId?: string,
+    resumeId?: string,
+    data?: any,
   ): void {
     const sseMessage: SseMessage = {
       type: 'progress',
@@ -1261,7 +1451,53 @@ export class ResumeAiService {
       retryCount,
       totalModules,
       currentModule,
-      recordId,
+      resumeId,
+      data,
+    };
+
+    sseSubject.next(sseMessage);
+  }
+
+  /**
+   * 发送SSE初始化消息
+   * 草稿简历创建成功后推送，前端据此立即进入编辑页
+   */
+  private sendInit(
+    sseSubject: Subject<SseMessage>,
+    totalModules: number,
+    resumeId: string,
+  ): void {
+    const sseMessage: SseMessage = {
+      type: 'init',
+      moduleName: 'system',
+      status: 'started',
+      totalModules,
+      currentModule: 0,
+      resumeId,
+    };
+
+    sseSubject.next(sseMessage);
+  }
+
+  /**
+   * 发送SSE完成消息
+   * 完整流程结束时推送 type: 'complete' 消息，携带生成的简历ID
+   */
+  private sendComplete(
+    sseSubject: Subject<SseMessage>,
+    totalModules: number,
+    currentModule: number,
+    resumeId: string,
+    message = '简历生成完成',
+  ): void {
+    const sseMessage: SseMessage = {
+      type: 'complete',
+      moduleName: 'complete',
+      status: 'completed',
+      message,
+      totalModules,
+      currentModule,
+      resumeId,
     };
 
     sseSubject.next(sseMessage);
@@ -1587,11 +1823,7 @@ export class ResumeAiService {
             ? ANALYSIS_INPUT_BUDGET_FALLBACK
             : ANALYSIS_INPUT_BUDGET;
         const { resumeContent, jobDescription: truncatedJd } =
-          buildTruncatedAnalysisContext(
-            resume,
-            jobDescription,
-            inputBudget,
-          );
+          buildTruncatedAnalysisContext(resume, jobDescription, inputBudget);
 
         const promptTemplate = PromptTemplate.fromTemplate(analyzeResumePrompt);
         // 第一次用配置的思考模式（默认 low），超时重试时强制关闭思考
@@ -1599,9 +1831,8 @@ export class ResumeAiService {
           attempt === 0
             ? this.aiService.generateAnalyzeResume()
             : this.aiService.generateAnalyzeResume('disabled');
-        const parser = this.aiService.createRobustStructuredParser(
-          AnalysisSchema,
-        );
+        const parser =
+          this.aiService.createRobustStructuredParser(AnalysisSchema);
         const chain = promptTemplate.pipe(model).pipe(parser);
 
         const controller = new AbortController();
@@ -1785,7 +2016,7 @@ export class ResumeAiService {
     lines.push('## 综合评分');
     lines.push('');
     lines.push(
-      `**总分：${a.overall_score ?? '—'}/100**　|　竞争力等级：${levelLabel[a.competitiveness_level] || a.competitiveness_level || '—'}`,
+      `**总分：${a.overall_score ?? '—'}/100**\u3000|\u3000竞争力等级：${levelLabel[a.competitiveness_level] || a.competitiveness_level || '—'}`,
     );
     lines.push('');
 
