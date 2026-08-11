@@ -111,6 +111,7 @@ export class ResumeAiController {
           message: error.message || '连接错误',
           totalModules: 0,
           currentModule: 0,
+          resumeId: (error as any)?.resumeId,
         };
         res.write(`data: ${JSON.stringify(errorMessage)}\n\n`);
         res.end();

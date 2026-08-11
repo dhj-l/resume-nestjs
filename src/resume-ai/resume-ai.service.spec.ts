@@ -732,6 +732,14 @@ describe('ResumeAiService - validateResumeContent', () => {
         });
       });
 
+      // 修复：最后一次重试失败后不再发送"重试中"消息。
+      // maxRetries=3 时仅前两次失败发重试消息（retryCount=1、2），第三次失败直接放弃。
+      const retryingMessages = messages.filter((m) => m.status === 'retrying');
+      expect(retryingMessages).toHaveLength(2);
+      expect(Math.max(...retryingMessages.map((m) => m.retryCount ?? 0))).toBe(
+        2,
+      );
+
       const errorMessages = messages.filter((m) => m.type === 'error');
       expect(errorMessages.length).toBeGreaterThanOrEqual(1);
       expect(errorMessages[errorMessages.length - 1]).toMatchObject({
@@ -860,6 +868,11 @@ describe('ResumeAiService - validateResumeContent', () => {
       const sourceResume = {
         _id: 'resume-source-1',
         title: '李四的简历',
+        // 原简历（来自 lean()）携带的元数据，buildDraftData 必须剔除，避免污染草稿
+        cover: 'old-cover.png',
+        isTemplate: false,
+        createdAt: new Date('2023-01-01'),
+        updatedAt: new Date('2023-02-01'),
         basicInfo: {
           name: '李四',
           phone: '13900000000',
@@ -950,6 +963,11 @@ describe('ResumeAiService - validateResumeContent', () => {
       expect(createdResume.title).toBe('李四-后端工程师');
       // 草稿初始继承原简历数据（含已选模块的旧数据）
       expect(createdResume.workExperience).toEqual(sourceResume.workExperience);
+      // 修复：buildDraftData 必须剔除原简历元数据，避免草稿继承旧封面/创建时间/模板标记
+      expect(createdResume.cover).toBeUndefined();
+      expect(createdResume.isTemplate).toBeUndefined();
+      expect(createdResume.createdAt).toBeUndefined();
+      expect(createdResume.updatedAt).toBeUndefined();
       // 已选模块生成后通过增量更新写入新数据
       expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
         'resume-id-123',

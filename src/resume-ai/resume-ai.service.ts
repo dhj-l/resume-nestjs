@@ -509,16 +509,16 @@ export class ResumeAiService {
     }
     const {
       _id,
-      _userId,
-      _user,
-      _createdAt,
-      _updatedAt,
+      userId: _userId,
+      user: _user,
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
       __v,
-      _isTemplate,
-      _cover,
-      _title,
-      _type,
-      _aiStatus,
+      isTemplate: _isTemplate,
+      cover: _cover,
+      title: _title,
+      type: _type,
+      aiStatus: _aiStatus,
       ...moduleData
     } = source;
     return { ...defaults, ...moduleData };
@@ -1010,6 +1010,7 @@ export class ResumeAiService {
       retryConfig,
       modules,
     ).catch((error: any) => {
+      this.logger.error('简历生成失败', error?.stack);
       // 发送错误消息
       const errorMessage: SseMessage = {
         type: 'error',
@@ -1021,7 +1022,9 @@ export class ResumeAiService {
         resumeId: error?.resumeId,
       };
       sseSubject.next(errorMessage);
-      sseSubject.error(error);
+      // 业务失败已通过 next 推送完整 error 消息（含 resumeId），
+      // 这里用 complete 正常结束流，避免再触发控制器 error 处理器写出第二帧丢失 resumeId。
+      sseSubject.complete();
       stopSignal.next();
       stopSignal.complete();
     });
@@ -1287,7 +1290,7 @@ export class ResumeAiService {
       } catch (error: any) {
         lastError = error;
 
-        if (attempt < retryConfig.maxRetries) {
+        if (attempt < retryConfig.maxRetries - 1) {
           // 发送重试消息
           this.sendProgress(
             sseSubject,

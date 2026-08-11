@@ -88,18 +88,6 @@ export class AiService {
   }
 
   /**
-   * 简历生成AI模型
-   */
-  generateResumeDeepSeek() {
-    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
-    const chat = this.createDefaultDeepSeek({
-      model: 'deepseek-chat',
-      apiKey,
-    });
-    return chat;
-  }
-
-  /**
    * 创建 Zod 结构化输出解析器
    *
    * 用 Zod schema 替换 JsonOutputParser，DeepSeek 输出不合法 JSON 时自动抛错，
