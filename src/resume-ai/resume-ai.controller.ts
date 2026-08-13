@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   InternalServerErrorException,
   Logger,
@@ -159,6 +160,24 @@ export class ResumeAiController {
   }
 
   /**
+   * 删除简历生成记录（仅删除记录，不影响关联简历）
+   */
+  @Delete('records/:id')
+  async deleteResumeRecord(
+    @Param('id') id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.deleteResumeRecord(userId, id);
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
    * AI润色简历模块内容
    */
   @Post('polish')
@@ -211,6 +230,8 @@ export class ResumeAiController {
     @Req() req: { user: { userId: string } },
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('status') status?: string,
+    @Query('keyword') keyword?: string,
   ) {
     try {
       const { userId } = req.user;
@@ -226,7 +247,27 @@ export class ResumeAiController {
         userId,
         validPage,
         validPageSize,
+        status,
+        keyword,
       );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 删除简历分析记录
+   */
+  @Delete('analysis-records/:id')
+  async deleteAnalysisRecord(
+    @Param('id') id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.deleteAnalysisRecord(userId, id);
     } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(error.message, error.stack);
@@ -303,6 +344,8 @@ export class ResumeAiController {
     @Req() req: { user: { userId: string } },
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('status') status?: string,
+    @Query('keyword') keyword?: string,
   ) {
     try {
       const { userId } = req.user;
@@ -318,7 +361,27 @@ export class ResumeAiController {
         userId,
         validPage,
         validPageSize,
+        status,
+        keyword,
       );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 删除 AI 押题记录
+   */
+  @Delete('question-records/:id')
+  async deleteQuestionRecord(
+    @Param('id') id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.deleteQuestionRecord(userId, id);
     } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(error.message, error.stack);

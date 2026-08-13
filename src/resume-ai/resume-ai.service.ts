@@ -687,22 +687,49 @@ export class ResumeAiService {
    */
   async getResumeRecords(userId: string, query: GetResumeRecordsDto) {
     try {
-      const { page = 1, pageSize = 10 } = query;
+      const { page = 1, pageSize = 10, status, keyword } = query;
       const skip = (page - 1) * pageSize;
+      const filter: Record<string, any> = { userId };
+      if (status) {
+        filter.status = status;
+      }
+      if (keyword) {
+        filter.jobDescription = {
+          $regex: this.escapeRegex(keyword),
+          $options: 'i',
+        };
+      }
       const [total, list] = await Promise.all([
-        this.resumeAiModel.countDocuments({ userId }),
+        this.resumeAiModel.countDocuments(filter),
         this.resumeAiModel
-          .find({ userId })
+          .find(filter)
           .select('-__v -resumeContent -generatedResumeDescription -detailInfo')
           .skip(skip)
           .limit(pageSize)
           .sort({ createdAt: -1 })
           .lean(),
       ]);
-      return { total, list: list.map(toResumeRecordResponse) };
+      return {
+        total,
+        list: list.map(toResumeRecordResponse),
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      };
     } catch (error: any) {
       throw new BadRequestException(error.message);
     }
+  }
+
+  /**
+   * 删除简历生成记录（仅删除记录，不影响关联简历）
+   */
+  async deleteResumeRecord(userId: string, id: string) {
+    const result = await this.resumeAiModel.deleteOne({ _id: id, userId });
+    if (!result.deletedCount) {
+      throw new BadRequestException('生成记录不存在或无权删除');
+    }
+    return { success: true };
   }
 
   /**
@@ -1941,16 +1968,33 @@ export class ResumeAiService {
   /**
    * 获取用户的简历分析记录列表
    */
-  async getAnalysisRecords(userId: string, page = 1, pageSize = 10) {
+  async getAnalysisRecords(
+    userId: string,
+    page = 1,
+    pageSize = 10,
+    status?: string,
+    keyword?: string,
+  ) {
     const skip = (page - 1) * pageSize;
+    const filter: Record<string, any> = { userId };
+    if (status) {
+      filter.status = status;
+    }
+    if (keyword) {
+      const regex = { $regex: this.escapeRegex(keyword), $options: 'i' };
+      filter.$or = [
+        { jobDescription: regex },
+        { 'analysisResult.meta.candidate_name': regex },
+      ];
+    }
     const [records, total] = await Promise.all([
       this.analysisRecordModel
-        .find({ userId })
+        .find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(pageSize)
         .lean(),
-      this.analysisRecordModel.countDocuments({ userId }),
+      this.analysisRecordModel.countDocuments(filter),
     ]);
 
     return {
@@ -1960,6 +2004,20 @@ export class ResumeAiService {
       pageSize,
       totalPages: Math.ceil(total / pageSize),
     };
+  }
+
+  /**
+   * 删除简历分析记录
+   */
+  async deleteAnalysisRecord(userId: string, id: string) {
+    const result = await this.analysisRecordModel.deleteOne({
+      _id: id,
+      userId,
+    });
+    if (!result.deletedCount) {
+      throw new BadRequestException('分析记录不存在或无权删除');
+    }
+    return { success: true };
   }
   /**
    * 获取用户的简历分析详情
@@ -2192,16 +2250,34 @@ export class ResumeAiService {
   /**
    * 获取用户的押题记录列表（分页）
    */
-  async getQuestionRecords(userId: string, page = 1, pageSize = 10) {
+  async getQuestionRecords(
+    userId: string,
+    page = 1,
+    pageSize = 10,
+    status?: string,
+    keyword?: string,
+  ) {
     const skip = (page - 1) * pageSize;
+    const filter: Record<string, any> = { userId };
+    if (status) {
+      filter.status = status;
+    }
+    if (keyword) {
+      const regex = { $regex: this.escapeRegex(keyword), $options: 'i' };
+      filter.$or = [
+        { jobDescription: regex },
+        { targetPosition: regex },
+        { candidateName: regex },
+      ];
+    }
     const [records, total] = await Promise.all([
       this.questionRecordModel
-        .find({ userId })
+        .find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(pageSize)
         .lean(),
-      this.questionRecordModel.countDocuments({ userId }),
+      this.questionRecordModel.countDocuments(filter),
     ]);
 
     return {
@@ -2211,6 +2287,20 @@ export class ResumeAiService {
       pageSize,
       totalPages: Math.ceil(total / pageSize),
     };
+  }
+
+  /**
+   * 删除 AI 押题记录
+   */
+  async deleteQuestionRecord(userId: string, id: string) {
+    const result = await this.questionRecordModel.deleteOne({
+      _id: id,
+      userId,
+    });
+    if (!result.deletedCount) {
+      throw new BadRequestException('押题记录不存在或无权删除');
+    }
+    return { success: true };
   }
 
   /**
@@ -2595,5 +2685,12 @@ export class ResumeAiService {
       byFunction: byFunctionMap,
       last30Days: last30DaysMap,
     };
+  }
+
+  /**
+   * 转义正则特殊字符，避免关键词搜索中的正则注入
+   */
+  private escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 }
