@@ -26,6 +26,11 @@ import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
 import { GetLatestAnalysisDto } from './dto/get-latest-analysis.dto';
 import { GetAnalysisDetailDto } from './dto/get-analysis-detail.dto';
 import { ExportAnalysisDto } from './dto/export-analysis.dto';
+import { PredictQuestionsDto } from './dto/predict-questions.dto';
+import {
+  GetQuestionDetailDto,
+  GetLatestQuestionDto,
+} from './dto/get-question-record.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -259,6 +264,98 @@ export class ResumeAiController {
   ) {
     try {
       return await this.resumeAiService.getLatestAnalysisByResumeId(
+        dto.resumeId,
+        req.user.userId,
+      );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * AI面试押题
+   */
+  @Post('predict-questions')
+  async predictQuestions(
+    @Body() predictQuestionsDto: PredictQuestionsDto,
+    @Req() req,
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.predictInterviewQuestions(
+        predictQuestionsDto,
+        userId,
+      );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取押题记录列表（分页）
+   */
+  @Get('question-records')
+  async getQuestionRecords(
+    @Req() req: { user: { userId: string } },
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    try {
+      const { userId } = req.user;
+      const parsedPage = page ? parseInt(page, 10) : 1;
+      const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
+      const validPage =
+        Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPageSize =
+        Number.isNaN(parsedPageSize) || parsedPageSize < 1
+          ? 10
+          : Math.min(parsedPageSize, 100);
+      return await this.resumeAiService.getQuestionRecords(
+        userId,
+        validPage,
+        validPageSize,
+      );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取押题记录详情
+   */
+  @Get('question-detail')
+  async getQuestionDetail(
+    @Query() dto: GetQuestionDetailDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.resumeAiService.getQuestionDetailService(
+        dto.id,
+        req.user.userId,
+      );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取简历最近一次的押题记录
+   */
+  @Get('latest-questions')
+  async getLatestQuestions(
+    @Query() dto: GetLatestQuestionDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.resumeAiService.getLatestQuestionsByResumeId(
         dto.resumeId,
         req.user.userId,
       );

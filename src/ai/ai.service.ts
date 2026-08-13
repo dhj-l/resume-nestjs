@@ -88,6 +88,26 @@ export class AiService {
   }
 
   /**
+   * 面试押题AI模型
+   *
+   * 输出规模受题目数量/字数上限约束，使用低温 + 关闭思考 + 中等 token 上限，
+   * 在保证 JSON 稳定性的同时控制 token 消耗。
+   */
+  generateInterviewQuestions() {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.3,
+      maxTokens: 8000,
+      thinking: 'disabled',
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
+    return chat;
+  }
+
+  /**
    * 创建 Zod 结构化输出解析器
    *
    * 用 Zod schema 替换 JsonOutputParser，DeepSeek 输出不合法 JSON 时自动抛错，

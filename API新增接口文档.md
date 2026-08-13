@@ -775,6 +775,237 @@ curl -X POST http://localhost:3000/api/v1/user/logout \
 
 ---
 
+## 模块五：AI 面试押题
+
+> ⚠️ **所有接口均需要 JWT 认证**（控制器级别 `@UseGuards(JwtAuthGuard)`），受控制器限流约束（60 秒内最多 10 次）。
+>
+> 押题逻辑：前端传入 `resumeId`、岗位 JD 与题目数量，后端从简历中提取求职岗位（`jobIntention.jobIntention`）与工作年限（`basicInfo.workYear`），组装提示词调用 DeepSeek，生成「题目 + 解答」JSON 并落库。
+
+### 13. AI 面试押题
+
+根据简历与目标岗位 JD 生成指定数量（8-15 道）的面试高频题，每道题附带参考解答；求职岗位与工作年限自动从简历中提取，缺失时由模型从简历内容推断。
+
+| 属性 | 值 |
+|------|-----|
+| **路径** | `POST /api/v1/resume-ai/predict-questions` |
+| **认证** | ✅ JWT |
+| **超时** | LLM 调用超时 120 秒（最多重试 2 次，末次重试收紧输入预算） |
+
+#### 请求参数（Body）
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `resumeId` | string | ✅ | 简历 ID |
+| `jobDescription` | string | ✅ | 目标岗位 JD（≤2000 字符） |
+| `questionCount` | number | ✅ | 押题数量，整数，范围 8-15 |
+
+#### 调用步骤
+
+1. 确保已登录，获取 JWT Token
+2. 准备简历 ID 与目标岗位 JD 文本
+3. 调用此接口提交押题请求
+4. 服务端校验 JD 与数量 → 恢复超时挂起任务 → 检查进行中任务 → 查询简历并提取岗位/年限 → 创建押题记录（状态 `generating`）→ 调用 LLM → 校验数量与字数 → 保存结果 → 记录 AI 用量
+
+#### 请求示例
+
+```bash
+curl -X POST http://localhost:3000/api/v1/resume-ai/predict-questions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..." \
+  -d '{
+    "resumeId": "64a1b2c3d4e5f6a7b8c9d0e1",
+    "jobDescription": "我们正在寻找一位拥有3年以上经验的前端开发工程师，精通Vue3、TypeScript与Node.js...",
+    "questionCount": 10
+  }'
+```
+
+#### 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "recordId": "64b2c3d4e5f6a7b8c9d0e1f2",
+    "result": [
+      {
+        "question": "请描述你在项目中使用 Vue3 响应式原理解决过的性能问题",
+        "answer": "答题要点：结合具体项目说明响应式依赖收集、避免大对象深度响应、使用 shallowRef/computed 缓存等，并给出可量化的优化效果。",
+        "category": "项目深挖",
+        "difficulty": "进阶"
+      }
+    ]
+  },
+  "timestamp": "2025-01-01T00:00:00.000Z",
+  "path": "/api/v1/resume-ai/predict-questions"
+}
+```
+
+#### 约束与边界
+
+- 题目（`question`）不超过 **80 字**，解答（`answer`）不超过 **250 字**，超限自动重试
+- 生成数量必须精确等于 `questionCount`，数量不符自动重试
+- 同一用户同时只允许一个进行中的押题任务；超过 5 分钟的挂起任务自动标记为失败
+- 记录状态流转：`generating` → `completed` / `failed`
+
+---
+
+### 14. 获取押题记录列表
+
+分页查询当前用户的押题记录。
+
+| 属性 | 值 |
+|------|-----|
+| **路径** | `GET /api/v1/resume-ai/question-records` |
+| **认证** | ✅ JWT |
+
+#### 请求参数（Query）
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `page` | number | ❌ | 1 | 页码（最小 1） |
+| `pageSize` | number | ❌ | 10 | 每页条数（最大 100） |
+
+#### 请求示例
+
+```bash
+curl -X GET "http://localhost:3000/api/v1/resume-ai/question-records?page=1&pageSize=10" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
+```
+
+#### 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "list": [
+      {
+        "_id": "64b2c3d4e5f6a7b8c9d0e1f2",
+        "resumeId": "64a1b2c3d4e5f6a7b8c9d0e1",
+        "jobDescription": "我们正在寻找...",
+        "questionCount": 10,
+        "targetPosition": "前端开发工程师",
+        "workYears": "3年",
+        "status": "completed",
+        "result": [],
+        "userId": "64a1b2c3d4e5f6a7b8c9d0e1",
+        "createdAt": "2025-01-01T00:00:00.000Z"
+      }
+    ],
+    "total": 25,
+    "page": 1,
+    "pageSize": 10,
+    "totalPages": 3
+  },
+  "timestamp": "2025-01-01T00:00:00.000Z",
+  "path": "/api/v1/resume-ai/question-records"
+}
+```
+
+---
+
+### 15. 获取押题详情
+
+根据押题记录 ID 获取单条押题记录的详细信息（含完整题目与解答）。
+
+| 属性 | 值 |
+|------|-----|
+| **路径** | `GET /api/v1/resume-ai/question-detail` |
+| **认证** | ✅ JWT |
+
+#### 请求参数（Query）
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | ✅ | 押题记录 ID |
+
+#### 请求示例
+
+```bash
+curl -X GET "http://localhost:3000/api/v1/resume-ai/question-detail?id=64b2c3d4e5f6a7b8c9d0e1f2" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
+```
+
+#### 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "_id": "64b2c3d4e5f6a7b8c9d0e1f2",
+    "resumeId": "64a1b2c3d4e5f6a7b8c9d0e1",
+    "jobDescription": "我们正在寻找...",
+    "questionCount": 10,
+    "targetPosition": "前端开发工程师",
+    "workYears": "3年",
+    "status": "completed",
+    "result": [
+      {
+        "question": "请描述你在项目中使用 Vue3 响应式原理解决过的性能问题",
+        "answer": "答题要点：...",
+        "category": "项目深挖",
+        "difficulty": "进阶"
+      }
+    ],
+    "userId": "64a1b2c3d4e5f6a7b8c9d0e1",
+    "createdAt": "2025-01-01T00:00:00.000Z",
+    "updatedAt": "2025-01-01T00:01:00.000Z"
+  },
+  "timestamp": "2025-01-01T00:00:00.000Z",
+  "path": "/api/v1/resume-ai/question-detail"
+}
+```
+
+---
+
+### 16. 获取简历最近一次押题
+
+查询指定简历最近一次的押题记录（抽屉打开时用于恢复历史结果）。
+
+| 属性 | 值 |
+|------|-----|
+| **路径** | `GET /api/v1/resume-ai/latest-questions` |
+| **认证** | ✅ JWT |
+
+#### 请求参数（Query）
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `resumeId` | string | ✅ | 简历 ID |
+
+#### 请求示例
+
+```bash
+curl -X GET "http://localhost:3000/api/v1/resume-ai/latest-questions?resumeId=64a1b2c3d4e5f6a7b8c9d0e1" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
+```
+
+#### 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "_id": "64b2c3d4e5f6a7b8c9d0e1f2",
+    "resumeId": "64a1b2c3d4e5f6a7b8c9d0e1",
+    "status": "completed",
+    "questionCount": 10,
+    "result": [],
+    "createdAt": "2025-01-01T00:00:00.000Z"
+  },
+  "timestamp": "2025-01-01T00:00:00.000Z",
+  "path": "/api/v1/resume-ai/latest-questions"
+}
+```
+
+> 如果该简历没有任何押题记录，`data` 为 `null`。
+
+---
+
 ## 汇总表
 
 | # | 方法 | 路径 | 认证 | 模块 | 说明 |
@@ -791,12 +1022,16 @@ curl -X POST http://localhost:3000/api/v1/user/logout \
 | 10 | `GET` | `/api/v1/admin/ai-usage-records/:id` | ✅ | 管理员 | 获取单条 AI 使用记录 |
 | 11 | `DELETE` | `/api/v1/admin/ai-usage-records/:id` | ✅ | 管理员 | 删除 AI 使用记录 |
 | 12 | `POST` | `/api/v1/user/logout` | ✅ | 用户 | 用户登出（Token 黑名单） |
+| 13 | `POST` | `/api/v1/resume-ai/predict-questions` | ✅ | 简历 AI | AI 面试押题（8-15 道，含解答） |
+| 14 | `GET` | `/api/v1/resume-ai/question-records` | ✅ | 简历 AI | 获取押题记录列表（分页） |
+| 15 | `GET` | `/api/v1/resume-ai/question-detail` | ✅ | 简历 AI | 获取押题详情 |
+| 16 | `GET` | `/api/v1/resume-ai/latest-questions` | ✅ | 简历 AI | 获取简历最近一次押题 |
 
 ### 认证分布
 
 | 类型 | 数量 | 接口 |
 |------|------|------|
-| 需要 JWT 认证 | 10 | #3 ~ #12 |
+| 需要 JWT 认证 | 14 | #3 ~ #16 |
 | 无需认证 | 2 | #1 ~ #2（Gitee OAuth 流程） |
 
 ### 新增文件清单

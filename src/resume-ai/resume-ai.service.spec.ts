@@ -44,6 +44,15 @@ describe('ResumeAiService - validateResumeContent', () => {
     create: jest.fn(),
   } as any;
 
+  const mockQuestionRecordModel = {
+    create: jest.fn(),
+    findOne: jest.fn(),
+    updateMany: jest.fn(),
+    findByIdAndUpdate: jest.fn(),
+    find: jest.fn(),
+    countDocuments: jest.fn(),
+  } as any;
+
   const mockAiService = {
     generateResume: jest.fn(),
     generateAnalyzeResume: jest.fn(),
@@ -78,6 +87,10 @@ describe('ResumeAiService - validateResumeContent', () => {
         {
           provide: 'AiUsageRecordModel',
           useValue: mockAiUsageRecordModel,
+        },
+        {
+          provide: 'ResumeQuestionRecordModel',
+          useValue: mockQuestionRecordModel,
         },
         {
           provide: AiService,

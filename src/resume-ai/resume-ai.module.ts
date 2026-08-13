@@ -20,6 +20,10 @@ import {
   AiUsageRecord,
   AiUsageRecordSchema,
 } from './entities/ai-usage-record.entity';
+import {
+  ResumeQuestionRecord,
+  ResumeQuestionRecordSchema,
+} from './entities/resume-question-record.entity';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -39,6 +43,10 @@ import {
       {
         schema: AiUsageRecordSchema,
         name: AiUsageRecord.name,
+      },
+      {
+        schema: ResumeQuestionRecordSchema,
+        name: ResumeQuestionRecord.name,
       },
     ]),
     AiModule,
@@ -60,6 +68,10 @@ import {
       {
         schema: AiUsageRecordSchema,
         name: AiUsageRecord.name,
+      },
+      {
+        schema: ResumeQuestionRecordSchema,
+        name: ResumeQuestionRecord.name,
       },
     ]),
   ],

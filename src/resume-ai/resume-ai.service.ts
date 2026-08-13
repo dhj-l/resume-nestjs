@@ -85,6 +85,18 @@ import {
   buildTruncatedAnalysisContext,
   normalizeAnalysisResult,
 } from './analysis.utils';
+import {
+  ResumeQuestionRecord,
+  QuestionStatusEnum,
+} from './entities/resume-question-record.entity';
+import { interviewQuestionsPrompt } from './prompt/interview-questions.prompt';
+import { PredictQuestionsDto } from './dto/predict-questions.dto';
+import {
+  InterviewQuestionSchema,
+  QUESTION_COUNT_MAX,
+  QUESTION_COUNT_MIN,
+  normalizeInterviewQuestions,
+} from './schemas/question.schema';
 
 /**
  * 将数组格式化为 Markdown 列表字符串，空数组返回「无」
@@ -107,6 +119,8 @@ export class ResumeAiService {
     private analysisRecordModel: Model<ResumeAnalysisRecord>,
     @InjectModel(AiUsageRecord.name)
     private aiUsageRecordModel: Model<AiUsageRecord>,
+    @InjectModel(ResumeQuestionRecord.name)
+    private questionRecordModel: Model<ResumeQuestionRecord>,
     private readonly aiService: AiService,
     private readonly documentParserService: DocumentParserService,
   ) {}
@@ -1963,6 +1977,249 @@ export class ResumeAiService {
 
   async getLatestAnalysisByResumeId(resumeId: string, userId: string) {
     const data = await this.analysisRecordModel
+      .findOne({ resumeId, userId })
+      .sort({ createdAt: -1 })
+      .select('-__v')
+      .lean();
+    return data;
+  }
+
+  /**
+   * AI面试押题（带自动重试 + 输入截断 + 挂起任务恢复 + 数量/字数校验）
+   */
+  async predictInterviewQuestions(
+    predictQuestionsDto: PredictQuestionsDto,
+    userId: string,
+  ) {
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY_MS = 1500;
+    const STUCK_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+
+    const { resumeId, jobDescription, questionCount } = predictQuestionsDto;
+
+    // 服务层兜底校验（DTO 管道已校验，此处防止绕过管道直接调用）
+    if (
+      !Number.isInteger(questionCount) ||
+      questionCount < QUESTION_COUNT_MIN ||
+      questionCount > QUESTION_COUNT_MAX
+    ) {
+      throw new BadRequestException(
+        `题目数量必须在 ${QUESTION_COUNT_MIN}-${QUESTION_COUNT_MAX} 之间`,
+      );
+    }
+
+    // 校验 JD 内容
+    const { isValid, reason } = this.validateJobDescription(jobDescription);
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
+
+    // 恢复超过 5 分钟的挂起押题任务
+    const stuckThreshold = new Date(Date.now() - STUCK_TASK_TIMEOUT_MS);
+    await this.questionRecordModel.updateMany(
+      {
+        userId,
+        status: QuestionStatusEnum.Generating,
+        createdAt: { $lt: stuckThreshold },
+      },
+      { status: QuestionStatusEnum.Failed, failReason: '任务超时自动恢复' },
+    );
+
+    // 检查是否有正在进行的押题任务
+    const existingRecord = await this.questionRecordModel.findOne({
+      userId,
+      status: QuestionStatusEnum.Generating,
+    });
+    if (existingRecord) {
+      throw new BadRequestException('存在正在进行的押题任务，请稍后重试');
+    }
+
+    // 查询简历
+    const resume = await this.resumeModel
+      .findOne({ _id: resumeId, userId })
+      .lean();
+    if (!resume) {
+      throw new BadRequestException('简历不存在');
+    }
+    const resumeDoc = resume as Record<string, any>;
+
+    // 从简历提取求职岗位与工作年限（缺失时由模型从简历内容推断）
+    const targetPosition =
+      resumeDoc.jobIntention?.jobIntention?.trim() ??
+      resumeDoc.jobIntention?.position?.trim() ??
+      '';
+    const workYears = resumeDoc.basicInfo?.workYear?.trim() ?? '';
+
+    // 创建押题记录
+    const record = await this.questionRecordModel.create({
+      resumeId,
+      jobDescription,
+      questionCount,
+      targetPosition,
+      workYears,
+      status: QuestionStatusEnum.Generating,
+      userId,
+    });
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const aiStartTime = Date.now();
+      try {
+        // 最后一次兜底尝试收紧输入预算，前两次使用常规预算
+        const inputBudget =
+          attempt === MAX_RETRIES
+            ? ANALYSIS_INPUT_BUDGET_FALLBACK
+            : ANALYSIS_INPUT_BUDGET;
+        const { resumeContent, jobDescription: truncatedJd } =
+          buildTruncatedAnalysisContext(resumeDoc, jobDescription, inputBudget);
+
+        const promptTemplate = PromptTemplate.fromTemplate(
+          interviewQuestionsPrompt,
+        );
+        const model = this.aiService.generateInterviewQuestions();
+        const parser = this.aiService.createRobustStructuredParser(
+          InterviewQuestionSchema,
+        );
+        const chain = promptTemplate.pipe(model).pipe(parser);
+
+        const controller = new AbortController();
+        const timeoutTimer = setTimeout(
+          () => controller.abort(),
+          ANALYSIS_TIMEOUT_MS,
+        );
+
+        let aiResult: Record<string, any>;
+        try {
+          const parsed = await chain.invoke(
+            {
+              jd: truncatedJd,
+              experience: resumeContent,
+              target_position:
+                targetPosition || '（简历中未明确，请根据 JD 推断）',
+              work_years: workYears || '（简历中未明确，请根据经历推断）',
+              question_count: String(questionCount),
+              current_date: formatDate(),
+            },
+            { signal: controller.signal },
+          );
+          aiResult = parsed as Record<string, any>;
+        } catch (error: any) {
+          if (controller.signal.aborted) {
+            throw new Error('AI押题超时');
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutTimer);
+        }
+
+        // 校验题目数量精确等于所选数量，且每题题目/解答非空、不超字数上限
+        const questions = normalizeInterviewQuestions(aiResult, questionCount);
+        const aiDuration = Date.now() - aiStartTime;
+
+        await this.questionRecordModel.findByIdAndUpdate(record._id, {
+          status: QuestionStatusEnum.Completed,
+          result: questions,
+        });
+
+        this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.InterviewQuestionPrediction,
+          success: true,
+          duration: aiDuration,
+          resumeId,
+          metadata: {
+            questionRecordId: record._id.toString(),
+            questionCount,
+          },
+        });
+
+        return {
+          recordId: record._id,
+          result: questions,
+        };
+      } catch (error: any) {
+        lastError = error;
+        this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.InterviewQuestionPrediction,
+          success: false,
+          duration: Date.now() - aiStartTime,
+          errorMessage: error.message,
+          resumeId,
+          metadata: {
+            questionRecordId: record._id.toString(),
+            questionCount,
+          },
+        });
+
+        if (attempt < MAX_RETRIES) {
+          this.logger.warn(
+            `predictInterviewQuestions 第 ${attempt + 1} 次失败，${MAX_RETRIES - attempt} 次重试剩余: ${error.message}`,
+          );
+          await this.sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
+        }
+      }
+    }
+
+    // 所有重试均失败
+    try {
+      await this.questionRecordModel.findByIdAndUpdate(record._id, {
+        status: QuestionStatusEnum.Failed,
+        failReason: lastError?.message || '未知错误',
+      });
+    } catch {
+      // 状态更新失败不影响错误抛出
+    }
+    this.logger.error(`AI押题失败，已重试 ${MAX_RETRIES} 次`, lastError?.stack);
+    throw new BadRequestException(
+      `AI押题失败，已重试 ${MAX_RETRIES} 次: ${lastError?.message || '未知错误'}`,
+    );
+  }
+
+  /**
+   * 获取用户的押题记录列表（分页）
+   */
+  async getQuestionRecords(userId: string, page = 1, pageSize = 10) {
+    const skip = (page - 1) * pageSize;
+    const [records, total] = await Promise.all([
+      this.questionRecordModel
+        .find({ userId })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean(),
+      this.questionRecordModel.countDocuments({ userId }),
+    ]);
+
+    return {
+      list: records,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
+
+  /**
+   * 获取押题记录详情
+   */
+  async getQuestionDetailService(id: string, userId: string) {
+    const data = await this.questionRecordModel
+      .findOne({ _id: id, userId })
+      .select('-__v')
+      .lean();
+    if (!data) {
+      throw new BadRequestException('查询不到对应的押题数据');
+    }
+    return data;
+  }
+
+  /**
+   * 获取简历最近一次的押题记录
+   */
+  async getLatestQuestionsByResumeId(resumeId: string, userId: string) {
+    const data = await this.questionRecordModel
       .findOne({ resumeId, userId })
       .sort({ createdAt: -1 })
       .select('-__v')
