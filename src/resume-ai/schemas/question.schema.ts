@@ -3,7 +3,7 @@ import { z } from 'zod';
 /** 题目字数上限 */
 export const QUESTION_TEXT_MAX = 80;
 /** 解答字数上限 */
-export const ANSWER_TEXT_MAX = 250;
+export const ANSWER_TEXT_MAX = 400;
 /** 押题数量下限 */
 export const QUESTION_COUNT_MIN = 8;
 /** 押题数量上限 */

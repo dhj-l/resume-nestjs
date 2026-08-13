@@ -163,10 +163,24 @@ describe('ResumeQuestionRecord - 面试押题', () => {
       ).toThrow();
     });
 
-    it('拒绝题目超过 80 字或解答超过 250 字', () => {
+    it('拒绝题目超过 80 字或解答超过 400 字', () => {
       expect(() =>
         InterviewQuestionSchema.parse(buildQuestions(QUESTION_COUNT_MIN, true)),
       ).toThrow();
+    });
+
+    it('接受 300-400 字的充实解答', () => {
+      const parsed = InterviewQuestionSchema.parse(
+        buildExtended({
+          answer: '很'.repeat(300),
+        }),
+      );
+      expect(parsed.questions[0].answer).toHaveLength(300);
+      expect(
+        InterviewQuestionSchema.parse(
+          buildExtended({ answer: '很'.repeat(400) }),
+        ).questions[0].answer,
+      ).toHaveLength(400);
     });
 
     it('接受扩展字段（keywords/followUp/evaluationPoint 与记录级汇总）', () => {

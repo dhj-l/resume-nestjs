@@ -853,7 +853,7 @@ curl -X POST http://localhost:3000/api/v1/resume-ai/predict-questions \
 
 #### 约束与边界
 
-- 题目（`question`）不超过 **80 字**，解答（`answer`）不超过 **250 字**，超限自动重试
+- 题目（`question`）不超过 **80 字**，解答（`answer`）不超过 **400 字**（建议 200-400 字），超限自动重试
 - 生成数量必须精确等于 `questionCount`，数量不符自动重试
 - 同一用户同时只允许一个进行中的押题任务；超过 5 分钟的挂起任务自动标记为失败
 - 记录状态流转：`generating` → `completed` / `failed`
