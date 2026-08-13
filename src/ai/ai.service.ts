@@ -98,7 +98,7 @@ export class AiService {
     const chat = this.createDefaultDeepSeek({
       apiKey,
       temperature: 0.3,
-      maxTokens: 8000,
+      maxTokens: 12000,
       thinking: 'disabled',
       modelKwargs: {
         response_format: { type: 'json_object' },

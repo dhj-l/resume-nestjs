@@ -2049,12 +2049,14 @@ export class ResumeAiService {
       resumeDoc.jobIntention?.position?.trim() ??
       '';
     const workYears = resumeDoc.basicInfo?.workYear?.trim() ?? '';
+    const candidateName = resumeDoc.basicInfo?.name?.trim() ?? '';
 
     // 创建押题记录
     const record = await this.questionRecordModel.create({
       resumeId,
       jobDescription,
       questionCount,
+      candidateName,
       targetPosition,
       workYears,
       status: QuestionStatusEnum.Generating,
@@ -2114,12 +2116,18 @@ export class ResumeAiService {
         }
 
         // 校验题目数量精确等于所选数量，且每题题目/解答非空、不超字数上限
-        const questions = normalizeInterviewQuestions(aiResult, questionCount);
+        const normalized = normalizeInterviewQuestions(aiResult, questionCount);
+        const { questions, overview, focusAreas, hotTopics, interviewTips } =
+          normalized;
         const aiDuration = Date.now() - aiStartTime;
 
         await this.questionRecordModel.findByIdAndUpdate(record._id, {
           status: QuestionStatusEnum.Completed,
           result: questions,
+          overview,
+          focusAreas,
+          hotTopics,
+          interviewTips,
         });
 
         this.recordAiUsage({
@@ -2137,6 +2145,10 @@ export class ResumeAiService {
         return {
           recordId: record._id,
           result: questions,
+          overview,
+          focusAreas,
+          hotTopics,
+          interviewTips,
         };
       } catch (error: any) {
         lastError = error;

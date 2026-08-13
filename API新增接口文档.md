@@ -827,12 +827,22 @@ curl -X POST http://localhost:3000/api/v1/resume-ai/predict-questions \
   "message": "success",
   "data": {
     "recordId": "64b2c3d4e5f6a7b8c9d0e1f2",
+    "overview": "综合押题说明：候选人核心优势在 Vue3 与中后台项目，需重点准备响应式原理、性能优化与工程化实践。",
+    "focusAreas": [
+      { "area": "Vue3 原理", "reason": "简历核心技能，面试官高频深挖" },
+      { "area": "性能优化", "reason": "JD 明确要求，需准备量化数据" }
+    ],
+    "hotTopics": ["Vue3 响应式", "AI 工程化", "性能优化"],
+    "interviewTips": ["用 STAR 法则组织项目回答", "提前准备 2-3 个量化成果数据"],
     "result": [
       {
         "question": "请描述你在项目中使用 Vue3 响应式原理解决过的性能问题",
         "answer": "答题要点：结合具体项目说明响应式依赖收集、避免大对象深度响应、使用 shallowRef/computed 缓存等，并给出可量化的优化效果。",
         "category": "项目深挖",
-        "difficulty": "进阶"
+        "difficulty": "进阶",
+        "keywords": ["Vue3 响应式", "性能优化"],
+        "followUp": "如果数据量继续增长，你会如何进一步优化？",
+        "evaluationPoint": "考察对响应式原理的理解深度"
       }
     ]
   },
@@ -847,6 +857,18 @@ curl -X POST http://localhost:3000/api/v1/resume-ai/predict-questions \
 - 生成数量必须精确等于 `questionCount`，数量不符自动重试
 - 同一用户同时只允许一个进行中的押题任务；超过 5 分钟的挂起任务自动标记为失败
 - 记录状态流转：`generating` → `completed` / `failed`
+
+#### 扩展字段说明（可选）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `overview` | string | 综合押题说明（≤200 字） |
+| `focusAreas` | array | 重点准备方向（2-4 项，`area` ≤20 字、`reason` ≤80 字） |
+| `hotTopics` | array | 行业高频考点（≤6 项，每项 ≤30 字） |
+| `interviewTips` | array | 面试备战建议（≤5 条，每条 ≤80 字） |
+| `result[].keywords` | array | 答题关键词（≤8 个，每个 ≤20 字） |
+| `result[].followUp` | string | 面试官可能的追问（≤60 字） |
+| `result[].evaluationPoint` | string | 本题考察的能力点（≤60 字） |
 
 ---
 
@@ -938,18 +960,26 @@ curl -X GET "http://localhost:3000/api/v1/resume-ai/question-detail?id=64b2c3d4e
     "_id": "64b2c3d4e5f6a7b8c9d0e1f2",
     "resumeId": "64a1b2c3d4e5f6a7b8c9d0e1",
     "jobDescription": "我们正在寻找...",
-    "questionCount": 10,
-    "targetPosition": "前端开发工程师",
-    "workYears": "3年",
-    "status": "completed",
-    "result": [
-      {
-        "question": "请描述你在项目中使用 Vue3 响应式原理解决过的性能问题",
-        "answer": "答题要点：...",
-        "category": "项目深挖",
-        "difficulty": "进阶"
-      }
-    ],
+        "questionCount": 10,
+        "targetPosition": "前端开发工程师",
+        "workYears": "3年",
+        "candidateName": "张三",
+        "status": "completed",
+        "result": [
+          {
+            "question": "请描述你在项目中使用 Vue3 响应式原理解决过的性能问题",
+            "answer": "答题要点：...",
+            "category": "项目深挖",
+            "difficulty": "进阶",
+            "keywords": ["Vue3 响应式", "性能优化"],
+            "followUp": "如果数据量继续增长，你会如何进一步优化？",
+            "evaluationPoint": "考察对响应式原理的理解深度"
+          }
+        ],
+        "overview": "综合押题说明：...",
+        "focusAreas": [{ "area": "Vue3 原理", "reason": "简历核心技能" }],
+        "hotTopics": ["Vue3 响应式", "性能优化"],
+        "interviewTips": ["用 STAR 法则组织项目回答"],
     "userId": "64a1b2c3d4e5f6a7b8c9d0e1",
     "createdAt": "2025-01-01T00:00:00.000Z",
     "updatedAt": "2025-01-01T00:01:00.000Z"

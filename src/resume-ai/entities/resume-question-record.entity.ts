@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, SchemaTypes, Types } from 'mongoose';
-import type { InterviewQuestionItem } from '../schemas/question.schema';
+import type {
+  InterviewQuestionItem,
+  QuestionFocusArea,
+} from '../schemas/question.schema';
 
 export type ResumeQuestionRecordDocument = ResumeQuestionRecord & Document;
 
@@ -47,6 +50,36 @@ export class ResumeQuestionRecord {
    */
   @Prop({ default: '' })
   workYears?: string;
+
+  /**
+   * 生成时从简历提取的候选人姓名（冗余存储，便于展示）
+   */
+  @Prop({ default: '' })
+  candidateName?: string;
+
+  /**
+   * 综合押题说明（整体押题思路与最需准备的方向）
+   */
+  @Prop({ type: String, default: undefined })
+  overview?: string;
+
+  /**
+   * 重点准备方向
+   */
+  @Prop({ type: SchemaTypes.Mixed, default: undefined })
+  focusAreas?: QuestionFocusArea[];
+
+  /**
+   * 行业高频考点
+   */
+  @Prop({ type: SchemaTypes.Mixed, default: undefined })
+  hotTopics?: string[];
+
+  /**
+   * 面试备战建议
+   */
+  @Prop({ type: SchemaTypes.Mixed, default: undefined })
+  interviewTips?: string[];
 
   /**
    * 押题状态

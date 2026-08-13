@@ -131,6 +131,18 @@ describe('ResumeQuestionRecord - 面试押题', () => {
       })),
     });
 
+    const buildExtended = (
+      item: Record<string, unknown> = {},
+      top: Record<string, unknown> = {},
+    ) => ({
+      ...top,
+      questions: Array.from({ length: QUESTION_COUNT_MIN }, (_, index) => ({
+        question: `q${index}`,
+        answer: `a${index}`,
+        ...item,
+      })),
+    });
+
     it('接受 8-15 道合法题目', () => {
       expect(
         InterviewQuestionSchema.parse(buildQuestions(QUESTION_COUNT_MIN))
@@ -156,6 +168,45 @@ describe('ResumeQuestionRecord - 面试押题', () => {
         InterviewQuestionSchema.parse(buildQuestions(QUESTION_COUNT_MIN, true)),
       ).toThrow();
     });
+
+    it('接受扩展字段（keywords/followUp/evaluationPoint 与记录级汇总）', () => {
+      const parsed = InterviewQuestionSchema.parse(
+        buildExtended(
+          {
+            keywords: ['Vue3'],
+            followUp: '如何验证优化效果？',
+            evaluationPoint: '考察响应式原理理解',
+          },
+          {
+            overview: '综合押题说明',
+            focusAreas: [{ area: 'Vue3 原理', reason: '核心技能' }],
+            hotTopics: ['AI 工程化'],
+            interviewTips: ['用 STAR 答题'],
+          },
+        ),
+      );
+      expect(parsed.questions).toHaveLength(QUESTION_COUNT_MIN);
+      expect(parsed.questions[0].keywords).toEqual(['Vue3']);
+      expect(parsed.overview).toBe('综合押题说明');
+    });
+
+    it('拒绝超限的扩展字段', () => {
+      expect(() =>
+        InterviewQuestionSchema.parse(
+          buildExtended({ keywords: ['很'.repeat(21)] }),
+        ),
+      ).toThrow();
+      expect(() =>
+        InterviewQuestionSchema.parse(
+          buildExtended({ followUp: '很'.repeat(61) }),
+        ),
+      ).toThrow();
+      expect(() =>
+        InterviewQuestionSchema.parse(
+          buildExtended({}, { overview: '很'.repeat(201) }),
+        ),
+      ).toThrow();
+    });
   });
 
   describe('normalizeInterviewQuestions', () => {
@@ -173,13 +224,52 @@ describe('ResumeQuestionRecord - 面试押题', () => {
         },
         1,
       );
-      expect(normalized).toEqual([
+      expect(normalized.questions).toEqual([
         {
           question: '请描述你的核心项目',
           answer: '要点一；要点二',
           category: '技术',
         },
       ]);
+    });
+
+    it('归一化扩展字段并返回记录级汇总', () => {
+      const normalized = normalizeInterviewQuestions(
+        {
+          overview: ' 综合押题说明 ',
+          focusAreas: [
+            { area: ' Vue3 原理 ', reason: ' 简历核心技能，高频追问 ' },
+            { area: '', reason: ' 空方向应被过滤 ' },
+          ],
+          hotTopics: [' AI 工程化 ', ' 性能优化 '],
+          interviewTips: [' 用 STAR 组织项目回答 '],
+          questions: [
+            {
+              question: 'q1',
+              answer: 'a1',
+              keywords: [' Vue3 响应式 ', '', ' 性能优化 '],
+              followUp: ' 如何验证优化效果？ ',
+              evaluationPoint: ' 考察响应式原理理解 ',
+            },
+          ],
+        },
+        1,
+      );
+      expect(normalized).toEqual({
+        overview: '综合押题说明',
+        focusAreas: [{ area: 'Vue3 原理', reason: '简历核心技能，高频追问' }],
+        hotTopics: ['AI 工程化', '性能优化'],
+        interviewTips: ['用 STAR 组织项目回答'],
+        questions: [
+          {
+            question: 'q1',
+            answer: 'a1',
+            keywords: ['Vue3 响应式', '性能优化'],
+            followUp: '如何验证优化效果？',
+            evaluationPoint: '考察响应式原理理解',
+          },
+        ],
+      });
     });
 
     it('数量与 questionCount 不符时抛错', () => {
@@ -232,6 +322,22 @@ describe('ResumeQuestionRecord - 面试押题', () => {
       })),
     });
 
+    const makeRichResult = () => ({
+      overview: '综合押题说明',
+      focusAreas: [{ area: 'Vue3 原理', reason: '简历核心技能，高频追问' }],
+      hotTopics: ['AI 工程化', '性能优化'],
+      interviewTips: ['用 STAR 组织项目回答'],
+      questions: Array.from({ length: 10 }, (_, index) => ({
+        question: `题目${index}`,
+        answer: `解答${index}`,
+        category: '技术',
+        difficulty: '基础',
+        keywords: [`关键词${index}`],
+        followUp: `追问${index}`,
+        evaluationPoint: `考察点${index}`,
+      })),
+    });
+
     const mockOkModel = (questions: unknown) =>
       RunnableLambda.from(async () => JSON.stringify(questions));
     const mockJsonParser = () =>
@@ -256,7 +362,7 @@ describe('ResumeQuestionRecord - 面试押题', () => {
     it('成功生成时落库 completed 并返回 recordId + result', async () => {
       mockAiService.generateInterviewQuestions = jest
         .fn()
-        .mockReturnValue(mockOkModel(makeQuestions(10)));
+        .mockReturnValue(mockOkModel(makeRichResult()));
       mockAiService.createRobustStructuredParser = jest
         .fn()
         .mockReturnValue(mockJsonParser());
@@ -267,6 +373,7 @@ describe('ResumeQuestionRecord - 面试押题', () => {
         resumeId: 'resume-1',
         jobDescription: validJd,
         questionCount: 10,
+        candidateName: '张三',
         targetPosition: '前端开发工程师',
         workYears: '3年',
         status: QuestionStatusEnum.Generating,
@@ -277,10 +384,18 @@ describe('ResumeQuestionRecord - 面试押题', () => {
         expect.objectContaining({
           status: QuestionStatusEnum.Completed,
           result: expect.any(Array),
+          overview: '综合押题说明',
+          focusAreas: expect.any(Array),
+          hotTopics: expect.any(Array),
+          interviewTips: expect.any(Array),
         }),
       );
       expect(result.recordId).toBe('record-1');
       expect(result.result).toHaveLength(10);
+      expect(result.overview).toBe('综合押题说明');
+      expect(result.result[0].keywords).toEqual(['关键词0']);
+      expect(result.result[0].followUp).toBe('追问0');
+      expect(result.result[0].evaluationPoint).toBe('考察点0');
       expect(mockAiUsageRecordModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           aiFunction: 'interview_question_prediction',
