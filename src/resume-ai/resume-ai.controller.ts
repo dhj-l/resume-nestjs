@@ -16,6 +16,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { type Response } from 'express';
 import { Observable } from 'rxjs';
+import { ParseObjectIdPipe } from '@nestjs/mongoose';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
@@ -164,7 +165,7 @@ export class ResumeAiController {
    */
   @Delete('records/:id')
   async deleteResumeRecord(
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Req() req: { user: { userId: string } },
   ) {
     try {
@@ -262,7 +263,7 @@ export class ResumeAiController {
    */
   @Delete('analysis-records/:id')
   async deleteAnalysisRecord(
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Req() req: { user: { userId: string } },
   ) {
     try {
@@ -376,7 +377,7 @@ export class ResumeAiController {
    */
   @Delete('question-records/:id')
   async deleteQuestionRecord(
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Req() req: { user: { userId: string } },
   ) {
     try {
