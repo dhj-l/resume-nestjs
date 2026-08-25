@@ -48,6 +48,46 @@ describe('AiService', () => {
     });
   });
 
+  describe('generateInterviewOutline', () => {
+    it('关闭思考并启用 JSON mode', () => {
+      const chat = service.generateInterviewOutline();
+      expect(chat.modelKwargs).toMatchObject({
+        thinking: { type: 'disabled' },
+        response_format: { type: 'json_object' },
+      });
+      expect(chat.modelKwargs).not.toHaveProperty('reasoning_effort');
+    });
+  });
+
+  describe('generateInterviewQuestion', () => {
+    it('默认开启 low 思考并输出 JSON', () => {
+      const chat = service.generateInterviewQuestion();
+      expect(chat.modelKwargs).toMatchObject({
+        thinking: { type: 'enabled' },
+        reasoning_effort: 'low',
+        response_format: { type: 'json_object' },
+      });
+    });
+
+    it('disabled 模式关闭思考', () => {
+      const chat = service.generateInterviewQuestion('disabled');
+      expect(chat.modelKwargs).toMatchObject({
+        thinking: { type: 'disabled' },
+      });
+      expect(chat.modelKwargs).not.toHaveProperty('reasoning_effort');
+    });
+  });
+
+  describe('generateInterviewReport', () => {
+    it('默认使用 medium 思考', () => {
+      const chat = service.generateInterviewReport();
+      expect(chat.modelKwargs).toMatchObject({
+        thinking: { type: 'enabled' },
+        reasoning_effort: 'medium',
+      });
+    });
+  });
+
   describe('createRobustStructuredParser', () => {
     const schema = z.object({ name: z.string().optional() });
 

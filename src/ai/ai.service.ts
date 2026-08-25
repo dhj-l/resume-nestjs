@@ -108,6 +108,69 @@ export class AiService {
   }
 
   /**
+   * 模拟面试考察大纲生成AI模型
+   *
+   * 输出为主题清单 JSON，使用低温 + 关闭思考 + JSON mode 保证结构稳定。
+   */
+  generateInterviewOutline() {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.3,
+      maxTokens: 8000,
+      thinking: 'disabled',
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
+    return chat;
+  }
+
+  /**
+   * 模拟面试出题/追问AI模型
+   *
+   * 对话式逐题生成，输出为 JSON 结构的题目对象；
+   * 追问决策需要结合候选人上一轮回答判断，默认开启 low 思考提升质量。
+   * @param mode 思考模式：disabled | low | medium | high
+   */
+  generateInterviewQuestion(mode?: DeepSeekThinkingMode) {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const thinkingMode = mode ?? this.resolveThinkingMode();
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.6,
+      maxTokens: 6000,
+      thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
+      reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
+    return chat;
+  }
+
+  /**
+   * 模拟面试评价报告生成AI模型
+   *
+   * 需要综合全量对话给出逐主题评分与总评，默认 medium 思考保证报告质量。
+   */
+  generateInterviewReport(mode?: DeepSeekThinkingMode) {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const thinkingMode = mode ?? 'medium';
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.2,
+      maxTokens: 16000,
+      thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
+      reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
+    return chat;
+  }
+
+  /**
    * 创建 Zod 结构化输出解析器
    *
    * 用 Zod schema 替换 JsonOutputParser，DeepSeek 输出不合法 JSON 时自动抛错，
