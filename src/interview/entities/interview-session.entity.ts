@@ -153,6 +153,12 @@ export class InterviewSession {
   messages: InterviewMessage[];
 
   /**
+   * 已考察的大纲主题 key 列表（按首次提问顺序）
+   */
+  @Prop({ type: [String], default: [] })
+  askedTopicKeys: string[];
+
+  /**
    * 完成后的评价报告（Zod 校验过的结构化输出）
    */
   @Prop({ type: SchemaTypes.Mixed, default: undefined })
