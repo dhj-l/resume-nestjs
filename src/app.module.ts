@@ -21,6 +21,7 @@ import { GitHubAuthModule } from './github-auth/github-auth.module';
 import { QQAuthModule } from './qq-auth/qq-auth.module';
 import { CryptoModule } from './common/crypto.module';
 import { AdminModule } from './admin/admin.module';
+import { InterviewModule } from './interview/interview.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { AdminModule } from './admin/admin.module';
     GitHubAuthModule,
     QQAuthModule,
     AdminModule,
+    InterviewModule,
   ],
   controllers: [AppController],
   providers: [
