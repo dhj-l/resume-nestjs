@@ -59,7 +59,7 @@ export class EvaluationService {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
         try {
-          const result = await chain.invoke(
+          const result = (await chain.invoke(
             {
               jd: jobDescription,
               experience_level_desc:
@@ -73,7 +73,7 @@ export class EvaluationService {
               current_date: formatDate(),
             },
             { signal: controller.signal },
-          ) as InterviewReport;
+          )) as InterviewReport;
           if (
             !result ||
             typeof result.overallScore !== 'number' ||
@@ -93,7 +93,9 @@ export class EvaluationService {
         }
       } catch (error: any) {
         lastError = error;
-        this.logger.warn(`报告生成第 ${attempt + 1} 次尝试失败：${error.message}`);
+        this.logger.warn(
+          `报告生成第 ${attempt + 1} 次尝试失败：${error.message}`,
+        );
       }
     }
     throw lastError ?? new Error('报告生成失败');
@@ -102,10 +104,11 @@ export class EvaluationService {
 
 function formatTranscript(messages: InterviewMessage[]): string {
   return messages
-    .map((message) =>
-      `${
-        message.role === MessageRoleEnum.Interviewer ? '面试官' : '候选人'
-      }（第 ${message.round} 轮）：${message.content}`,
+    .map(
+      (message) =>
+        `${
+          message.role === MessageRoleEnum.Interviewer ? '面试官' : '候选人'
+        }（第 ${message.round} 轮）：${message.content}`,
     )
     .join('\n\n');
 }

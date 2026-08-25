@@ -2,7 +2,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RunnableLambda } from '@langchain/core/runnables';
 import { AiService } from 'src/ai/ai.service';
 import { EvaluationService } from './evaluation.service';
-import { ExperienceLevelEnum, InterviewFocusEnum } from '../constants/level.constants';
+import {
+  ExperienceLevelEnum,
+  InterviewFocusEnum,
+} from '../constants/level.constants';
 
 describe('EvaluationService - 面试评价报告', () => {
   let service: EvaluationService;
@@ -20,7 +23,14 @@ describe('EvaluationService - 面试评价报告', () => {
   const validReport = {
     overallScore: 75,
     summary: '整体表现良好。',
-    topics: [{ topicKey: 'database', title: '数据库设计', score: 70, comment: '基本概念清晰' }],
+    topics: [
+      {
+        topicKey: 'database',
+        title: '数据库设计',
+        score: 70,
+        comment: '基本概念清晰',
+      },
+    ],
   };
 
   beforeAll(async () => {

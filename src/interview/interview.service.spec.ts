@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { EvaluationService } from './services/evaluation.service';
@@ -82,7 +78,10 @@ describe('InterviewService - 模拟面试编排', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         InterviewService,
-        { provide: getModelToken('InterviewSession'), useValue: mockSessionModel },
+        {
+          provide: getModelToken('InterviewSession'),
+          useValue: mockSessionModel,
+        },
         { provide: getModelToken('Resume'), useValue: mockResumeModel },
         { provide: QuestionEngineService, useValue: mockEngine },
         { provide: EvaluationService, useValue: mockEvaluation },
@@ -127,9 +126,9 @@ describe('InterviewService - 模拟面试编排', () => {
         }),
       );
       // 过期时间应已设置
-      expect(
-        mockSessionModel.create.mock.calls[0][0].expiresAt,
-      ).toBeInstanceOf(Date);
+      expect(mockSessionModel.create.mock.calls[0][0].expiresAt).toBeInstanceOf(
+        Date,
+      );
     });
 
     it('should reject an invalid JD', async () => {
@@ -143,9 +142,9 @@ describe('InterviewService - 模拟面试编排', () => {
       mockResumeModel.findOne.mockReturnValue({
         lean: jest.fn().mockResolvedValue(null),
       });
-      await expect(
-        service.createSession(createDto, userId),
-      ).rejects.toThrow('简历不存在');
+      await expect(service.createSession(createDto, userId)).rejects.toThrow(
+        '简历不存在',
+      );
     });
 
     it('should reject when an in_progress session exists', async () => {
@@ -209,7 +208,9 @@ describe('InterviewService - 模拟面试编排', () => {
     it('should return the next question and advance the round', async () => {
       const session = buildActiveSession({ currentRound: 2 });
       mockSessionModel.findOne.mockResolvedValue(session);
-      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({ lean: () => Promise.resolve({}) }));
+      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({
+        lean: () => Promise.resolve({}),
+      }));
       mockResumeModel.findOne.mockReturnValue({
         lean: jest.fn().mockResolvedValue(resumeDoc),
       });
@@ -240,7 +241,9 @@ describe('InterviewService - 模拟面试编排', () => {
         targetRounds: 8,
       });
       mockSessionModel.findOne.mockResolvedValue(session);
-      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({ lean: () => Promise.resolve({}) }));
+      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({
+        lean: () => Promise.resolve({}),
+      }));
       mockEvaluation.generateReport.mockResolvedValue({ overallScore: 80 });
 
       const result = await service.submitAnswer(session._id, answerDto, userId);
@@ -253,7 +256,9 @@ describe('InterviewService - 模拟面试编排', () => {
     it('should finish early when AI suggests ending past minimum rounds', async () => {
       const session = buildActiveSession({ currentRound: 4 });
       mockSessionModel.findOne.mockResolvedValue(session);
-      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({ lean: () => Promise.resolve({}) }));
+      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({
+        lean: () => Promise.resolve({}),
+      }));
       mockResumeModel.findOne.mockReturnValue({
         lean: jest.fn().mockResolvedValue(resumeDoc),
       });
@@ -273,7 +278,9 @@ describe('InterviewService - 模拟面试编排', () => {
     it('should ignore AI end suggestion before minimum rounds', async () => {
       const session = buildActiveSession({ currentRound: 1 });
       mockSessionModel.findOne.mockResolvedValue(session);
-      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({ lean: () => Promise.resolve({}) }));
+      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({
+        lean: () => Promise.resolve({}),
+      }));
       mockResumeModel.findOne.mockReturnValue({
         lean: jest.fn().mockResolvedValue(resumeDoc),
       });
@@ -294,7 +301,9 @@ describe('InterviewService - 模拟面试编排', () => {
         expiresAt: new Date(Date.now() - 1000),
       });
       mockSessionModel.findOne.mockResolvedValue(session);
-      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({ lean: () => Promise.resolve({}) }));
+      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({
+        lean: () => Promise.resolve({}),
+      }));
 
       await expect(
         service.submitAnswer(SESSION_ID, answerDto, userId),
@@ -336,16 +345,18 @@ describe('InterviewService - 模拟面试编排', () => {
     it('should finish with report on explicit finish', async () => {
       const session = buildActiveSession({ currentRound: 3 });
       mockSessionModel.findOne.mockResolvedValue(session);
-      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({ lean: () => Promise.resolve({}) }));
+      mockSessionModel.findByIdAndUpdate.mockImplementation(() => ({
+        lean: () => Promise.resolve({}),
+      }));
       mockEvaluation.generateReport.mockResolvedValue({ overallScore: 70 });
 
       await service.finishSession(SESSION_ID, userId);
 
       expect(mockEvaluation.generateReport).toHaveBeenCalledTimes(1);
       // 报告应使用当前已有的全部对话
-      expect(
-        mockEvaluation.generateReport.mock.calls[0][0].messages,
-      ).toBe(session.messages);
+      expect(mockEvaluation.generateReport.mock.calls[0][0].messages).toBe(
+        session.messages,
+      );
     });
   });
 

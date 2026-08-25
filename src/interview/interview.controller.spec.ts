@@ -39,9 +39,9 @@ describe('InterviewController', () => {
     mockService.createSession.mockRejectedValue(
       new ConflictException('已有进行中的会话'),
     );
-    await expect(controller.createSession({} as any, req as any)).rejects.toThrow(
-      ConflictException,
-    );
+    await expect(
+      controller.createSession({} as any, req as any),
+    ).rejects.toThrow(ConflictException);
   });
 
   it('should convert unknown errors to internal server error', async () => {

@@ -84,9 +84,9 @@ export class QuestionEngineService {
       try {
         const chain = PromptTemplate.fromTemplate(interviewOutlinePrompt)
           .pipe(this.aiService.generateInterviewOutline())
-          .pipe(this.aiService.createRobustStructuredParser(
-            InterviewOutlineSchema,
-          ));
+          .pipe(
+            this.aiService.createRobustStructuredParser(InterviewOutlineSchema),
+          );
 
         const result = (await this.invokeWithTimeout(chain, {
           jd: jobDescription,
@@ -133,9 +133,11 @@ export class QuestionEngineService {
       try {
         const chain = PromptTemplate.fromTemplate(interviewQuestionPrompt)
           .pipe(this.aiService.generateInterviewQuestion())
-          .pipe(this.aiService.createRobustStructuredParser(
-            InterviewQuestionDecisionSchema,
-          ));
+          .pipe(
+            this.aiService.createRobustStructuredParser(
+              InterviewQuestionDecisionSchema,
+            ),
+          );
 
         const decision = (await this.invokeWithTimeout(chain, {
           jd: jobDescription,
@@ -150,9 +152,7 @@ export class QuestionEngineService {
             formatConversationHistory(params.messages) ||
             '（尚无对话，这是第一题）',
           round: String(params.round),
-          target_rounds: String(
-            this.resolveTargetRounds(params.levelConfig),
-          ),
+          target_rounds: String(this.resolveTargetRounds(params.levelConfig)),
         })) as InterviewQuestionDecision;
 
         if (!decision.question?.trim()) {
@@ -197,10 +197,11 @@ function formatDate(): string {
 function formatConversationHistory(messages: InterviewMessage[]): string {
   return messages
     .slice(-HISTORY_MESSAGE_LIMIT)
-    .map((message) =>
-      `${
-        message.role === MessageRoleEnum.Interviewer ? '面试官' : '候选人'
-      }：${message.content}`,
+    .map(
+      (message) =>
+        `${
+          message.role === MessageRoleEnum.Interviewer ? '面试官' : '候选人'
+        }：${message.content}`,
     )
     .join('\n');
 }

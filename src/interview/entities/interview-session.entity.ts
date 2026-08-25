@@ -1,13 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, SchemaTypes, Types } from 'mongoose';
-import {
-  LevelConfig,
-  LevelConfigSchema,
-} from './level-config.entity';
+import { LevelConfig, LevelConfigSchema } from './level-config.entity';
 import {
   InterviewEndedReasonEnum,
   InterviewStatusEnum,
 } from '../constants/level.constants';
+import type { InterviewOutlineTopic } from '../schemas/interview-outline.schema';
 
 /**
  * 对话消息角色
@@ -65,7 +63,11 @@ export class InterviewMessage {
   /**
    * 来源渠道（v1 固定 text，为语音扩展预留）
    */
-  @Prop({ type: String, default: MessageChannelEnum.Text, enum: MessageChannelEnum })
+  @Prop({
+    type: String,
+    default: MessageChannelEnum.Text,
+    enum: MessageChannelEnum,
+  })
   channel: MessageChannelEnum;
 
   /**
@@ -132,7 +134,7 @@ export class InterviewSession {
    * 结构：[{ key, title, description, difficulty }]
    */
   @Prop({ type: SchemaTypes.Mixed, default: undefined })
-  outline?: Record<string, any>[];
+  outline?: InterviewOutlineTopic[];
 
   /**
    * 当前轮次（从 1 开始）

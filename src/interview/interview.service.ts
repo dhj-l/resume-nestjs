@@ -89,8 +89,9 @@ export class InterviewService {
       resume,
       levelConfig: dto.levelConfig,
     });
-    const targetRounds =
-      this.questionEngine.resolveTargetRounds(dto.levelConfig);
+    const targetRounds = this.questionEngine.resolveTargetRounds(
+      dto.levelConfig,
+    );
 
     const decision = await this.questionEngine.generateNextQuestion({
       jobDescription: dto.jobDescription,
@@ -113,9 +114,7 @@ export class InterviewService {
         outline,
         currentRound: 1,
         askedTopicKeys: [decision.topicKey],
-        messages: [
-          buildInterviewerMessage(decision.question, 1),
-        ],
+        messages: [buildInterviewerMessage(decision.question, 1)],
         lastActivityAt: now,
         expiresAt: computeExpiresAt(now),
       });
@@ -204,7 +203,10 @@ export class InterviewService {
       decision.shouldEndInterview &&
       currentRound >= MIN_ROUNDS_BEFORE_AI_END
     ) {
-      return this.completeWithReport(session, InterviewEndedReasonEnum.AiSuggest);
+      return this.completeWithReport(
+        session,
+        InterviewEndedReasonEnum.AiSuggest,
+      );
     }
 
     const nextRound = currentRound + 1;
@@ -214,7 +216,9 @@ export class InterviewService {
     }
 
     await this.sessionModel.findByIdAndUpdate(session._id, {
-      $push: { messages: buildInterviewerMessage(decision.question, nextRound) },
+      $push: {
+        messages: buildInterviewerMessage(decision.question, nextRound),
+      },
       $set: {
         currentRound: nextRound,
         askedTopicKeys,
@@ -239,10 +243,7 @@ export class InterviewService {
     userId: string,
   ): Promise<InterviewSession> {
     const session = await this.requireActiveSession(sessionId, userId);
-    return this.completeAndSave(
-      session,
-      InterviewEndedReasonEnum.UserFinish,
-    );
+    return this.completeAndSave(session, InterviewEndedReasonEnum.UserFinish);
   }
 
   /**

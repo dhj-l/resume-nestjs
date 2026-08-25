@@ -19,10 +19,7 @@ import {
   CreateInterviewSessionDto,
   SubmitAnswerDto,
 } from './dto/create-interview-session.dto';
-import {
-  InterviewService,
-  SseEvent,
-} from './interview.service';
+import { InterviewService, SseEvent } from './interview.service';
 
 @Controller('interview')
 @UseGuards(JwtAuthGuard)
@@ -107,11 +104,7 @@ export class InterviewController {
     // 先获取 Observable：校验失败等同步异常交由全局过滤器按 JSON 错误格式返回
     let events$: Observable<SseEvent>;
     try {
-      events$ = this.interviewService.submitAnswerSse(
-        id,
-        dto,
-        req.user.userId,
-      );
+      events$ = this.interviewService.submitAnswerSse(id, dto, req.user.userId);
     } catch (error: any) {
       throw this.wrapError(error);
     }

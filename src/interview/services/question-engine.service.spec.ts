@@ -2,9 +2,15 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RunnableLambda } from '@langchain/core/runnables';
 import { AiService } from 'src/ai/ai.service';
 import { QuestionEngineService } from './question-engine.service';
-import { ExperienceLevelEnum, InterviewFocusEnum } from '../constants/level.constants';
+import {
+  ExperienceLevelEnum,
+  InterviewFocusEnum,
+} from '../constants/level.constants';
 import type { InterviewMessage } from '../entities/interview-session.entity';
-import { MessageKindEnum, MessageRoleEnum } from '../entities/interview-session.entity';
+import {
+  MessageKindEnum,
+  MessageRoleEnum,
+} from '../entities/interview-session.entity';
 
 describe('QuestionEngineService - 出题引擎', () => {
   let service: QuestionEngineService;
@@ -193,9 +199,9 @@ describe('QuestionEngineService - 出题引擎', () => {
       expect(remainingSection).toContain('database');
       expect(remainingSection).toContain('project_architecture');
       expect(
-        remainingSection.slice(0, remainingSection.indexOf('##')).includes(
-          'nodejs_basics',
-        ),
+        remainingSection
+          .slice(0, remainingSection.indexOf('##'))
+          .includes('nodejs_basics'),
       ).toBe(false);
       // 对话历史应包含面试官与候选人的发言
       expect(capturedPrompt).toContain('面试官');

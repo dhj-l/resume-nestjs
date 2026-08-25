@@ -51,13 +51,9 @@ export class CreateInterviewSessionDto {
    * 目标岗位 JD
    */
   @IsString()
-  @Length(
-    JD_LENGTH_CONSTRAINT.minimum,
-    JD_LENGTH_CONSTRAINT.maximum,
-    {
-      message: `JD 内容长度需在 ${JD_LENGTH_CONSTRAINT.minimum}-${JD_LENGTH_CONSTRAINT.maximum} 字符之间`,
-    },
-  )
+  @Length(JD_LENGTH_CONSTRAINT.minimum, JD_LENGTH_CONSTRAINT.maximum, {
+    message: `JD 内容长度需在 ${JD_LENGTH_CONSTRAINT.minimum}-${JD_LENGTH_CONSTRAINT.maximum} 字符之间`,
+  })
   jobDescription: string;
 
   /**
