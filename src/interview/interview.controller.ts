@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Body,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -19,6 +20,7 @@ import {
   CreateInterviewSessionDto,
   SubmitAnswerDto,
 } from './dto/create-interview-session.dto';
+import { ListInterviewSessionsDto } from './dto/list-interview-sessions.dto';
 import { InterviewService, SseEvent } from './interview.service';
 
 @Controller('interview')
@@ -39,6 +41,21 @@ export class InterviewController {
   ) {
     try {
       return await this.interviewService.createSession(dto, req.user.userId);
+    } catch (error) {
+      throw this.wrapError(error);
+    }
+  }
+
+  /**
+   * 分页获取我的面试记录列表（不含对话历史与报告正文）
+   */
+  @Get('sessions')
+  async listSessions(
+    @Query() query: ListInterviewSessionsDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.interviewService.listSessions(req.user.userId, query);
     } catch (error) {
       throw this.wrapError(error);
     }

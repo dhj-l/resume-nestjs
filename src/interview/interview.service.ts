@@ -19,6 +19,7 @@ import {
   CreateInterviewSessionDto,
   SubmitAnswerDto,
 } from './dto/create-interview-session.dto';
+import { ListInterviewSessionsDto } from './dto/list-interview-sessions.dto';
 import {
   InterviewMessage,
   MessageChannelEnum,
@@ -145,6 +146,41 @@ export class InterviewService {
       return session;
     }
     return session;
+  }
+
+  /**
+   * 分页获取当前用户的面试记录列表
+   * 列表项不含对话历史与报告正文（大字段），以 hasReport 标记是否已有报告
+   */
+  async listSessions(userId: string, query: ListInterviewSessionsDto) {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 10;
+
+    const filter: Record<string, any> = { userId: toObjectId(userId) };
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    const [list, total] = await Promise.all([
+      this.sessionModel
+        .find(filter)
+        .select('-messages -report')
+        .sort({ startedAt: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .lean(),
+      this.sessionModel.countDocuments(filter),
+    ]);
+
+    return {
+      list: (list as InterviewSession[]).map((item) => ({
+        ...item,
+        hasReport: item.status === InterviewStatusEnum.Completed,
+      })),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   /**

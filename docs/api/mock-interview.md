@@ -348,6 +348,58 @@ InterviewSession（status=`completed`，endedReason=`user_finish`，report 已�
 
 ---
 
+## 9. 获取面试记录列表
+
+分页返回当前用户的历史面试会话（按开始时间倒序）。列表项为会话摘要，**不含 `messages` 对话历史与 `report` 报告正文**，以 `hasReport` 标记报告是否已生成；需要详情时再调接口 3 / 接口 8。
+
+- **URL**: `GET /interview/sessions`
+
+### 查询参数（Query）
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `page` | int | 否 | 页码，默认 `1` |
+| `pageSize` | int | 否 | 每页数量，默认 `10`，最大 `50` |
+| `status` | string | 否 | 状态筛选：`in_progress` / `completed` / `cancelled`，不传返回全部 |
+
+### 响应 data
+
+```jsonc
+{
+  "list": [
+    {
+      "_id": "66f0...",
+      "resumeId": "66e0...",
+      "jobDescription": "前端开发工程师（Node.js 方向）……",
+      "levelConfig": { "experienceLevel": "mid", "focus": "technical" },
+      "status": "completed",
+      "outline": [{ "key": "nodejs_event_loop", "title": "Node.js 事件循环", "difficulty": "mid" }],
+      "currentRound": 8,
+      "targetRounds": 8,
+      "askedTopicKeys": ["nodejs_event_loop"],
+      "hasReport": true,          // 是否已生成报告（status=completed 即为 true）
+      "lastActivityAt": "2026-08-25T12:00:00.000Z",
+      "startedAt": "2026-08-25T11:20:00.000Z",
+      "endedAt": "2026-08-25T12:05:00.000Z",
+      "endedReason": "completed",
+      "createdAt": "2026-08-25T11:20:00.000Z",
+      "updatedAt": "2026-08-25T12:05:00.000Z"
+    }
+  ],
+  "total": 12,
+  "page": 1,
+  "pageSize": 10
+}
+```
+
+### 错误
+
+| code | message |
+|------|---------|
+| 400 | `page 必须是整数` / `pageSize 最大为 50` / `status 必须是 in_progress/completed/cancelled 之一` |
+
+---
+
 ## 推荐联调流程
 
 ```text

@@ -8,6 +8,7 @@ describe('InterviewController', () => {
 
   const mockService = {
     createSession: jest.fn(),
+    listSessions: jest.fn(),
     getCurrentSession: jest.fn(),
     getSessionDetail: jest.fn(),
     submitAnswer: jest.fn(),
@@ -33,6 +34,21 @@ describe('InterviewController', () => {
     const result = await controller.createSession({} as any, req as any);
     expect(result).toEqual({ _id: 's1' });
     expect(mockService.createSession).toHaveBeenCalledWith({}, 'user-1');
+  });
+
+  it('listSessions should delegate query with current user', async () => {
+    const query = { page: 2, pageSize: 5, status: 'completed' } as any;
+    const data = { list: [], total: 0, page: 2, pageSize: 5 };
+    mockService.listSessions.mockResolvedValue(data);
+    expect(await controller.listSessions(query, req as any)).toBe(data);
+    expect(mockService.listSessions).toHaveBeenCalledWith('user-1', query);
+  });
+
+  it('listSessions should convert unknown errors to internal server error', async () => {
+    mockService.listSessions.mockRejectedValue(new Error('boom'));
+    await expect(controller.listSessions({}, req as any)).rejects.toThrow(
+      '服务器内部错误',
+    );
   });
 
   it('should wrap business exceptions through unchanged', async () => {

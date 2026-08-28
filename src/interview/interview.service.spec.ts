@@ -7,6 +7,7 @@ import { InterviewService } from './interview.service';
 import {
   ExperienceLevelEnum,
   InterviewFocusEnum,
+  InterviewStatusEnum,
 } from './constants/level.constants';
 
 describe('InterviewService - 模拟面试编排', () => {
@@ -14,6 +15,8 @@ describe('InterviewService - 模拟面试编排', () => {
 
   const mockSessionModel = {
     create: jest.fn(),
+    find: jest.fn(),
+    countDocuments: jest.fn(),
     findOne: jest.fn(),
     findOneAndUpdate: jest.fn(),
     findByIdAndUpdate: jest.fn(),
@@ -374,6 +377,65 @@ describe('InterviewService - 模拟面试编排', () => {
         buildActiveSession({ report, status: 'completed' }),
       );
       expect(await service.getReport(SESSION_ID, userId)).toBe(report);
+    });
+  });
+
+  describe('listSessions', () => {
+    const buildFindChain = (list: any[] = []) => {
+      const chain = {
+        select: jest.fn().mockReturnThis(),
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue(list),
+      };
+      mockSessionModel.find.mockReturnValue(chain);
+      return chain;
+    };
+
+    it('should return paginated sessions with default page/pageSize', async () => {
+      const chain = buildFindChain([
+        { _id: 's2', status: 'completed' },
+        { _id: 's1', status: 'cancelled' },
+      ]);
+      mockSessionModel.countDocuments.mockResolvedValue(2);
+
+      const result = await service.listSessions(userId, {});
+
+      expect(result).toEqual({
+        list: [
+          { _id: 's2', status: 'completed', hasReport: true },
+          { _id: 's1', status: 'cancelled', hasReport: false },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 10,
+      });
+      expect(mockSessionModel.find).toHaveBeenCalledWith({
+        userId: expect.anything(),
+      });
+      expect(chain.select).toHaveBeenCalledWith('-messages -report');
+      expect(chain.sort).toHaveBeenCalledWith({ startedAt: -1 });
+      expect(chain.skip).toHaveBeenCalledWith(0);
+      expect(chain.limit).toHaveBeenCalledWith(10);
+    });
+
+    it('should apply status filter and pagination offsets', async () => {
+      const chain = buildFindChain();
+      mockSessionModel.countDocuments.mockResolvedValue(0);
+
+      await service.listSessions(userId, {
+        page: 3,
+        pageSize: 5,
+        status: InterviewStatusEnum.Completed,
+      });
+
+      expect(mockSessionModel.find).toHaveBeenCalledWith({
+        userId: expect.anything(),
+        status: InterviewStatusEnum.Completed,
+      });
+      expect(chain.skip).toHaveBeenCalledWith(10);
+      expect(chain.limit).toHaveBeenCalledWith(5);
     });
   });
 });
