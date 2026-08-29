@@ -131,6 +131,10 @@ export class AiService {
    *
    * 对话式逐题生成，输出为 JSON 结构的题目对象；
    * 追问决策需要结合候选人上一轮回答判断，默认开启 low 思考提升质量。
+   *
+   * 注意：思考模式下不可叠加 response_format=json_object，
+   * 否则模型会偶发性地把回答整体写入思考通道，正文 content 为空。
+   * JSON 稳定性由提示词 + createRobustStructuredParser 保证。
    * @param mode 思考模式：disabled | low | medium | high
    */
   generateInterviewQuestion(mode?: DeepSeekThinkingMode) {
@@ -142,9 +146,10 @@ export class AiService {
       maxTokens: 6000,
       thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
       reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
-      modelKwargs: {
-        response_format: { type: 'json_object' },
-      },
+      modelKwargs:
+        thinkingMode === 'disabled'
+          ? { response_format: { type: 'json_object' } }
+          : undefined,
     });
     return chat;
   }
@@ -153,6 +158,8 @@ export class AiService {
    * 模拟面试评价报告生成AI模型
    *
    * 需要综合全量对话给出逐主题评分与总评，默认 medium 思考保证报告质量。
+   * 与 generateInterviewQuestion 同理：思考模式下不叠加 response_format，
+   * 避免偶发空正文。
    */
   generateInterviewReport(mode?: DeepSeekThinkingMode) {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
@@ -163,9 +170,10 @@ export class AiService {
       maxTokens: 16000,
       thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
       reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
-      modelKwargs: {
-        response_format: { type: 'json_object' },
-      },
+      modelKwargs:
+        thinkingMode === 'disabled'
+          ? { response_format: { type: 'json_object' } }
+          : undefined,
     });
     return chat;
   }

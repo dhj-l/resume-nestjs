@@ -60,31 +60,33 @@ describe('AiService', () => {
   });
 
   describe('generateInterviewQuestion', () => {
-    it('默认开启 low 思考并输出 JSON', () => {
+    it('思考模式下不叠加 response_format（避免空正文），JSON 由 robust parser 兜底', () => {
       const chat = service.generateInterviewQuestion();
       expect(chat.modelKwargs).toMatchObject({
         thinking: { type: 'enabled' },
         reasoning_effort: 'low',
-        response_format: { type: 'json_object' },
       });
+      expect(chat.modelKwargs).not.toHaveProperty('response_format');
     });
 
-    it('disabled 模式关闭思考', () => {
+    it('disabled 模式关闭思考并启用 JSON mode', () => {
       const chat = service.generateInterviewQuestion('disabled');
       expect(chat.modelKwargs).toMatchObject({
         thinking: { type: 'disabled' },
+        response_format: { type: 'json_object' },
       });
       expect(chat.modelKwargs).not.toHaveProperty('reasoning_effort');
     });
   });
 
   describe('generateInterviewReport', () => {
-    it('默认使用 medium 思考', () => {
+    it('默认使用 medium 思考且不叠加 response_format', () => {
       const chat = service.generateInterviewReport();
       expect(chat.modelKwargs).toMatchObject({
         thinking: { type: 'enabled' },
         reasoning_effort: 'medium',
       });
+      expect(chat.modelKwargs).not.toHaveProperty('response_format');
     });
   });
 
