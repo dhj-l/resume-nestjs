@@ -30,9 +30,11 @@ import {
   InterviewSession,
   InterviewSessionDocument,
 } from './entities/interview-session.entity';
+import { InterviewTtsCache } from './entities/interview-tts-cache.entity';
 import { validateJobDescriptionText } from './utils/job-description.validator';
 import { QuestionEngineService } from './services/question-engine.service';
 import { EvaluationService } from './services/evaluation.service';
+import { TtsAudio, TtsService } from 'src/ai/tts.service';
 
 /**
  * 提交回答后的结果：下一题，或面试已结束并附报告
@@ -54,8 +56,11 @@ export class InterviewService {
     private readonly sessionModel: Model<InterviewSessionDocument>,
     @InjectModel(Resume.name)
     private readonly resumeModel: Model<any>,
+    @InjectModel(InterviewTtsCache.name)
+    private readonly ttsCacheModel: Model<any>,
     private readonly questionEngine: QuestionEngineService,
     private readonly evaluationService: EvaluationService,
+    private readonly ttsService: TtsService,
   ) {}
 
   /**
@@ -316,6 +321,62 @@ export class InterviewService {
       throw new BadRequestException('该面试尚未生成评价报告');
     }
     return session.report;
+  }
+
+  /**
+   * 获取指定轮次面试官问题的语音（wav）
+   *
+   * 按 round 从会话消息中取回面试官提问文本，不透传任意文本；
+   * 会话已结束（回放）同样可用。
+   * 合成结果按 (sessionId, round) 落库缓存 30 天，重复点播不再调用 TTS。
+   */
+  async getQuestionAudio(
+    sessionId: string,
+    userId: string,
+    round: number,
+  ): Promise<TtsAudio> {
+    const session = await this.findOwnedSession(sessionId, userId);
+    const question = session.messages?.find(
+      (message) =>
+        message.role === MessageRoleEnum.Interviewer &&
+        message.kind === MessageKindEnum.Question &&
+        message.round === round,
+    );
+    if (!question?.content) {
+      throw new BadRequestException('该轮次的问题不存在');
+    }
+
+    const cacheFilter = {
+      sessionId: toObjectId(sessionId),
+      round,
+    };
+    const cached = await this.ttsCacheModel
+      .findOne(cacheFilter)
+      .lean<{ audio: Buffer; mimeType: string } | null>();
+    if (cached?.audio) {
+      return { buffer: cached.audio, mimeType: cached.mimeType };
+    }
+
+    const audio = await this.ttsService.synthesize(question.content);
+    try {
+      await this.ttsCacheModel.updateOne(
+        cacheFilter,
+        {
+          $set: {
+            sessionId: toObjectId(sessionId),
+            round,
+            text: question.content,
+            audio: audio.buffer,
+            mimeType: audio.mimeType,
+          },
+        },
+        { upsert: true },
+      );
+    } catch (error) {
+      // 缓存写失败不影响本次播放，下次点播重新合成
+      this.logger.warn('TTS 缓存落库失败', (error as Error).message);
+    }
+    return audio;
   }
 
   /**

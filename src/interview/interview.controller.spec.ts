@@ -16,6 +16,7 @@ describe('InterviewController', () => {
     finishSession: jest.fn(),
     cancelSession: jest.fn(),
     getReport: jest.fn(),
+    getQuestionAudio: jest.fn(),
   } as any;
 
   const req = { user: { userId: 'user-1' } };
@@ -87,5 +88,45 @@ describe('InterviewController', () => {
         {} as any,
       ),
     ).toThrow(BadRequestException);
+  });
+
+  describe('getQuestionTts', () => {
+    const res = { setHeader: jest.fn(), send: jest.fn() };
+
+    it('should send wav binary with cache headers', async () => {
+      const audio = { buffer: Buffer.from('wav-bytes'), mimeType: 'audio/wav' };
+      mockService.getQuestionAudio.mockResolvedValue(audio);
+
+      await controller.getQuestionTts(
+        '507f1f77bcf86cd799439011',
+        { round: 2 },
+        req as any,
+        res as any,
+      );
+
+      expect(mockService.getQuestionAudio).toHaveBeenCalledWith(
+        '507f1f77bcf86cd799439011',
+        'user-1',
+        2,
+      );
+      expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'audio/wav');
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Cache-Control',
+        'private, max-age=86400',
+      );
+      expect(res.send).toHaveBeenCalledWith(audio.buffer);
+    });
+
+    it('should wrap unknown errors as internal server error', async () => {
+      mockService.getQuestionAudio.mockRejectedValue(new Error('boom'));
+      await expect(
+        controller.getQuestionTts(
+          '507f1f77bcf86cd799439011',
+          { round: 2 },
+          req as any,
+          res as any,
+        ),
+      ).rejects.toThrow('服务器内部错误');
+    });
   });
 });

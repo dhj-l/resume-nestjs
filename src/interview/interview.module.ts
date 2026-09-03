@@ -7,6 +7,10 @@ import {
   InterviewSession,
   InterviewSessionSchema,
 } from './entities/interview-session.entity';
+import {
+  InterviewTtsCache,
+  InterviewTtsCacheSchema,
+} from './entities/interview-tts-cache.entity';
 import { InterviewController } from './interview.controller';
 import { InterviewService } from './interview.service';
 import { QuestionEngineService } from './services/question-engine.service';
@@ -18,6 +22,7 @@ import { InterviewTimeoutScheduler } from './interview-timeout.scheduler';
     ScheduleModule.forRoot(),
     MongooseModule.forFeature([
       { schema: InterviewSessionSchema, name: InterviewSession.name },
+      { schema: InterviewTtsCacheSchema, name: InterviewTtsCache.name },
       { schema: ResumeSchema, name: Resume.name },
     ]),
     AiModule,

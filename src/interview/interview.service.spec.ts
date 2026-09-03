@@ -1,8 +1,13 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { EvaluationService } from './services/evaluation.service';
 import { QuestionEngineService } from './services/question-engine.service';
+import { TtsService } from 'src/ai/tts.service';
 import { InterviewService } from './interview.service';
 import {
   ExperienceLevelEnum,
@@ -35,6 +40,15 @@ describe('InterviewService - 模拟面试编排', () => {
 
   const mockEvaluation = {
     generateReport: jest.fn(),
+  } as any;
+
+  const mockTts = {
+    synthesize: jest.fn(),
+  } as any;
+
+  const mockTtsCacheModel = {
+    findOne: jest.fn(),
+    updateOne: jest.fn(),
   } as any;
 
   const userId = 'user-1';
@@ -86,8 +100,13 @@ describe('InterviewService - 模拟面试编排', () => {
           useValue: mockSessionModel,
         },
         { provide: getModelToken('Resume'), useValue: mockResumeModel },
+        {
+          provide: getModelToken('InterviewTtsCache'),
+          useValue: mockTtsCacheModel,
+        },
         { provide: QuestionEngineService, useValue: mockEngine },
         { provide: EvaluationService, useValue: mockEvaluation },
+        { provide: TtsService, useValue: mockTts },
       ],
     }).compile();
     service = module.get<InterviewService>(InterviewService);
@@ -377,6 +396,134 @@ describe('InterviewService - 模拟面试编排', () => {
         buildActiveSession({ report, status: 'completed' }),
       );
       expect(await service.getReport(SESSION_ID, userId)).toBe(report);
+    });
+  });
+
+  describe('getQuestionAudio', () => {
+    const sessionWithQuestion = buildActiveSession({
+      status: 'completed',
+      messages: [
+        {
+          role: 'interviewer',
+          content: '第一题：请介绍一下事件循环。',
+          round: 1,
+          kind: 'question',
+        },
+        { role: 'candidate', content: '我的回答', round: 1, kind: 'answer' },
+      ],
+    });
+
+    // 默认无缓存、写缓存成功，个别用例再覆盖
+    beforeEach(() => {
+      mockTtsCacheModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(null),
+      });
+      mockTtsCacheModel.updateOne.mockResolvedValue({});
+    });
+
+    it('should synthesize audio for the question of the given round', async () => {
+      mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
+      mockTts.synthesize.mockResolvedValue({
+        buffer: Buffer.from('wav-bytes'),
+        mimeType: 'audio/wav',
+      });
+
+      const result = await service.getQuestionAudio(SESSION_ID, userId, 1);
+
+      expect(result.mimeType).toBe('audio/wav');
+      expect(mockTts.synthesize).toHaveBeenCalledWith(
+        '第一题：请介绍一下事件循环。',
+      );
+    });
+
+    it('should return cached audio without calling tts again', async () => {
+      mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
+      mockTtsCacheModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          audio: Buffer.from('cached-wav'),
+          mimeType: 'audio/wav',
+        }),
+      });
+
+      const result = await service.getQuestionAudio(SESSION_ID, userId, 1);
+
+      expect(result.buffer.toString()).toBe('cached-wav');
+      expect(mockTts.synthesize).not.toHaveBeenCalled();
+      expect(mockTtsCacheModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('should upsert synthesized audio into the cache', async () => {
+      mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
+      const wav = Buffer.from('fresh-wav');
+      mockTts.synthesize.mockResolvedValue({
+        buffer: wav,
+        mimeType: 'audio/wav',
+      });
+
+      await service.getQuestionAudio(SESSION_ID, userId, 1);
+
+      expect(mockTtsCacheModel.updateOne).toHaveBeenCalledWith(
+        {
+          sessionId: expect.anything(),
+          round: 1,
+        },
+        {
+          $set: {
+            sessionId: expect.anything(),
+            round: 1,
+            text: '第一题：请介绍一下事件循环。',
+            audio: wav,
+            mimeType: 'audio/wav',
+          },
+        },
+        { upsert: true },
+      );
+    });
+
+    it('should still return audio when caching fails', async () => {
+      mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
+      mockTts.synthesize.mockResolvedValue({
+        buffer: Buffer.from('wav-bytes'),
+        mimeType: 'audio/wav',
+      });
+      mockTtsCacheModel.updateOne.mockRejectedValue(new Error('dup key'));
+
+      await expect(
+        service.getQuestionAudio(SESSION_ID, userId, 1),
+      ).resolves.toEqual({
+        buffer: Buffer.from('wav-bytes'),
+        mimeType: 'audio/wav',
+      });
+    });
+
+    it('should stay available for ended sessions (replay)', async () => {
+      // 会话已 completed，回放场景仍可获取历史问题语音
+      mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
+      mockTts.synthesize.mockResolvedValue({
+        buffer: Buffer.from('wav'),
+        mimeType: 'audio/wav',
+      });
+
+      await expect(
+        service.getQuestionAudio(SESSION_ID, userId, 1),
+      ).resolves.toBeTruthy();
+    });
+
+    it('should reject when the round has no interviewer question', async () => {
+      mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
+
+      await expect(
+        service.getQuestionAudio(SESSION_ID, userId, 9),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockTts.synthesize).not.toHaveBeenCalled();
+    });
+
+    it('should reject when session is not owned by the user', async () => {
+      mockSessionModel.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getQuestionAudio(SESSION_ID, userId, 1),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

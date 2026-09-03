@@ -400,6 +400,43 @@ InterviewSession（status=`completed`，endedReason=`user_finish`，report 已�
 
 ---
 
+## 10. 获取面试官问题语音（TTS）
+
+`GET /interview/sessions/:id/tts?round=N`
+
+按轮次取回该轮面试官提问文本，经 MiMo TTS 合成为语音后以 **wav 二进制流**直接返回（不走统一响应包络）。按会话归属校验权限；会话已结束（回放）同样可用。
+
+**服务端缓存**：合成结果按 `sessionId + round` 落库缓存 **30 天**（`interview_tts_cache` 集合，TTL 自动回收）。命中缓存的点播不再调用 MiMo 合成，不产生费用；过期后重新点播会重新合成一次。浏览器侧仍建议按 `max-age` 缓存以省一次请求。
+
+### 查询参数（Query）
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `round` | number | 是 | 问题轮次（从 1 开始），须对应一条面试官提问消息 |
+
+### 响应
+
+- `Content-Type: audio/wav`，响应体为音频字节
+- `Cache-Control: private, max-age=86400`（同会话同轮次音频内容不变，浏览器可缓存）
+- 鉴权失败 / 参数非法仍按统一 JSON 错误包络返回
+
+### 前端建议用法
+
+1. 收到新问题（`question` 帧 `data.round`）后请求该接口，取回 `Blob` 经 `URL.createObjectURL` 交给 `Audio` 播放；与打字机动画并行，互不阻塞
+2. 前端按 `sessionId:round` 缓存 objectURL，喇叭图标重播时直接命中缓存
+3. `autoplay` 依赖用户与页面的既有交互（提交回答的点击已满足），自动播放失败时静默降级为手动点击播放
+
+### 错误
+
+| code | message |
+|------|---------|
+| 400 | `该轮次的问题不存在` / `round 必须是整数` 等 |
+| 404 | `面试会话不存在` |
+| 500 | `语音合成失败，请稍后重试`（未配置 `MIMO_API_KEY` 或合成过程异常） |
+| 502 | `语音服务账户余额不足，请联系管理员充值` / `语音服务未授权，请检查 MIMO_API_KEY 配置` / `语音服务请求过于频繁，请稍后重试` / `语音合成失败：…`（MiMo 上游错误） |
+
+---
+
 ## 推荐联调流程
 
 ```text

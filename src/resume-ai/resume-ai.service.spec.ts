@@ -1085,5 +1085,97 @@ describe('ResumeAiService - validateResumeContent', () => {
         } as any),
       ).toBe('AI 生成简历');
     });
+
+    describe('normalizeDraftSortFields - 草稿排序字段归一化', () => {
+      it('缺失值（落库补 0）按默认序号补位，不得抢占 AI 指定的顺序', async () => {
+        (mockResumeModel.findById as jest.Mock).mockReturnValue({
+          lean: jest.fn().mockResolvedValue({
+            workExperience: [{ name: 'A', globalSort: 2, localSort: 2 }],
+            // globalSort=0 是缺失字段落库时被 schema default 补齐的形态
+            projectExperience: [{ name: 'P', globalSort: 0, localSort: 1 }],
+            educationBackground: [{ name: 'E', globalSort: 1, localSort: 1 }],
+            skills: { content: 'a,b', globalSort: 0 },
+            certificates: { content: 'c', globalSort: 7 },
+          }),
+        });
+        (mockResumeModel.findByIdAndUpdate as jest.Mock).mockResolvedValue({});
+
+        await service['normalizeDraftSortFields']('resume-id-123');
+
+        // 缺失的 project/skills 按默认序号 2/6 参与排序，而非旧的 0 排最前；
+        // 重编号后 education=1、work=2、project=3；缺席的 internship/campus/
+        // selfEvaluation 占位 4/5/8（不写回），skills/certificates 保持 6/7
+        expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
+          'resume-id-123',
+          {
+            $set: {
+              educationBackground: [{ name: 'E', globalSort: 1, localSort: 1 }],
+              workExperience: [{ name: 'A', globalSort: 2, localSort: 1 }],
+              projectExperience: [{ name: 'P', globalSort: 3, localSort: 1 }],
+              'skills.globalSort': 6,
+              'certificates.globalSort': 7,
+            },
+          },
+        );
+      });
+
+      it('全部缺失时按 prompt 默认顺序重编号 1..8', async () => {
+        (mockResumeModel.findById as jest.Mock).mockReturnValue({
+          lean: jest.fn().mockResolvedValue({
+            workExperience: [{ name: 'A', globalSort: 0, localSort: 1 }],
+            projectExperience: [{ name: 'P', globalSort: 0, localSort: 1 }],
+            educationBackground: [{ name: 'E', globalSort: 0, localSort: 1 }],
+            internshipExperience: [{ name: 'I', globalSort: 0, localSort: 1 }],
+            campusExperience: [{ name: 'C', globalSort: 0, localSort: 1 }],
+            skills: { content: 'a,b', globalSort: 0 },
+            certificates: { content: 'c', globalSort: 0 },
+            selfEvaluation: { content: 's', globalSort: 0 },
+          }),
+        });
+        (mockResumeModel.findByIdAndUpdate as jest.Mock).mockResolvedValue({});
+
+        await service['normalizeDraftSortFields']('resume-id-123');
+
+        const update = (mockResumeModel.findByIdAndUpdate as jest.Mock).mock
+          .calls[0][1].$set;
+        expect(update.workExperience[0].globalSort).toBe(1);
+        expect(update.projectExperience[0].globalSort).toBe(2);
+        expect(update.educationBackground[0].globalSort).toBe(3);
+        expect(update.internshipExperience[0].globalSort).toBe(4);
+        expect(update.campusExperience[0].globalSort).toBe(5);
+        expect(update['skills.globalSort']).toBe(6);
+        expect(update['certificates.globalSort']).toBe(7);
+        expect(update['selfEvaluation.globalSort']).toBe(8);
+      });
+
+      it('空数组模块跳过写回，数组内 localSort 按既有相对顺序重编', async () => {
+        (mockResumeModel.findById as jest.Mock).mockReturnValue({
+          lean: jest.fn().mockResolvedValue({
+            workExperience: [
+              { name: 'A', globalSort: 5, localSort: 0 },
+              { name: 'B', globalSort: 5, localSort: 0 },
+            ],
+            campusExperience: [],
+          }),
+        });
+        (mockResumeModel.findByIdAndUpdate as jest.Mock).mockResolvedValue({});
+
+        await service['normalizeDraftSortFields']('resume-id-123');
+
+        // work=4：前方 project/education/internship 缺席但占号 1/2/3（不写回）；
+        // 空数组 campus 跳过写回；localSort 保持既有相对顺序重编为 1..2
+        expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
+          'resume-id-123',
+          {
+            $set: {
+              workExperience: [
+                { name: 'A', globalSort: 4, localSort: 1 },
+                { name: 'B', globalSort: 4, localSort: 2 },
+              ],
+            },
+          },
+        );
+      });
+    });
   });
 });

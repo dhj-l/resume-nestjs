@@ -49,6 +49,7 @@ jest.mock('puppeteer', () => ({
 
 jest.mock('fs', () => ({
   readFileSync: jest.fn().mockReturnValue('/* mock tailwind css */'),
+  existsSync: jest.fn().mockReturnValue(false),
 }));
 
 /* ------------------------------------------------------------------ */

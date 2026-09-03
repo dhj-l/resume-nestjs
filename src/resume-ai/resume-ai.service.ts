@@ -559,6 +559,122 @@ export class ResumeAiService {
   }
 
   /**
+   * 参与排序的模块字段及 prompt 约定的默认序号
+   * （与 common-constraints 排序规范保持一致）
+   */
+  private static readonly SORTABLE_MODULE_SORT: ReadonlyArray<
+    readonly [string, number]
+  > = [
+    ['workExperience', 1],
+    ['projectExperience', 2],
+    ['educationBackground', 3],
+    ['internshipExperience', 4],
+    ['campusExperience', 5],
+    ['skills', 6],
+    ['certificates', 7],
+    ['selfEvaluation', 8],
+  ];
+
+  /**
+   * 提取模块的排序代表值
+   *
+   * 0 视为缺失：AI 遗漏 globalSort 时，落库的 $set 会被 schema 的
+   * default: 0 补齐（mongoose cast），lean 读出的值就是 0；且 prompt
+   * 约定合法值必须为正整数。0 若按真实值参与排序，缺失模块会排到
+   * 所有有效模块之前，破坏 AI 明确的模块顺序。
+   */
+  private static readRepresentativeSort(
+    value: any,
+    defaultSort: number,
+  ): number {
+    const raw = Number(value?.globalSort ?? 0);
+    return Number.isFinite(raw) && raw > 0 ? raw : defaultSort;
+  }
+
+  /**
+   * 挂起任务判定超时：必须大于重试链最坏耗时（(maxRetries+1) 次尝试 × 超时 + 指数退避总和），
+   * 否则仍在途的任务会被并发请求误判为挂起并重复发起
+   */
+  private static computeStuckTaskTimeoutMs(
+    maxRetries: number,
+    retryDelayMs: number,
+  ): number {
+    return (
+      (maxRetries + 1) * ANALYSIS_TIMEOUT_MS +
+      retryDelayMs * (Math.pow(2, maxRetries) - 1) +
+      60_000
+    );
+  }
+
+  /**
+   * 保序重编号草稿模块的排序字段
+   *
+   * AI 输出的 globalSort 可能缺失（落库补默认 0）或多个模块同值，
+   * 前端的"交换式排序"对相等值是空操作，导致模块排序无反应。
+   * 这里按各模块代表值稳定排序后重编为连续唯一值（1..n）：
+   * - 模块间相对顺序完全保留 AI 的设计（含个性化调整），仅收敛数值；
+   * - 缺失值按 prompt 默认序号补位参与排序；
+   * - 数组模块内条目统一为同一 globalSort，localSort 按既有顺序重编为 1..n。
+   */
+  private async normalizeDraftSortFields(resumeId: string): Promise<void> {
+    const draft = (await this.resumeModel.findById(resumeId).lean()) as any;
+    if (!draft) return;
+
+    // 收集参与排序的模块及其代表值（数组取首项，对象取字段值，0/缺失用默认序号）
+    const entries = ResumeAiService.SORTABLE_MODULE_SORT.map(
+      ([field, defaultSort]) => {
+        const value = draft[field];
+        let representative = defaultSort;
+        if (Array.isArray(value)) {
+          if (value.length) {
+            representative = ResumeAiService.readRepresentativeSort(
+              value[0],
+              defaultSort,
+            );
+          }
+        } else if (value && typeof value === 'object') {
+          representative = ResumeAiService.readRepresentativeSort(
+            value,
+            defaultSort,
+          );
+        }
+        return { field, defaultSort, representative };
+      },
+    );
+
+    // 按代表值稳定排序，同值按 prompt 默认序号决胜
+    entries.sort(
+      (a, b) =>
+        a.representative - b.representative || a.defaultSort - b.defaultSort,
+    );
+
+    // 重编号并写回（空数组无条目可写，跳过，占用的序号留空隙不影响唯一性）
+    const update: Record<string, any> = {};
+    entries.forEach((entry, rankIndex) => {
+      const rank = rankIndex + 1;
+      const value = draft[entry.field];
+      if (Array.isArray(value)) {
+        if (!value.length) return;
+        // 按既有 localSort 稳定排序后重编，保留条目相对顺序
+        const items = [...value].sort(
+          (a: any, b: any) => (a?.localSort ?? 0) - (b?.localSort ?? 0),
+        );
+        update[entry.field] = items.map((item: any, i: number) => ({
+          ...item,
+          globalSort: rank,
+          localSort: i + 1,
+        }));
+      } else if (value && typeof value === 'object') {
+        update[`${entry.field}.globalSort`] = rank;
+      }
+    });
+
+    if (Object.keys(update).length) {
+      await this.resumeModel.findByIdAndUpdate(resumeId, { $set: update });
+    }
+  }
+
+  /**
    * 组装 AI 生成简历标题：用户名-岗位名称
    * Manual 用 detailInfo；Select 继承原简历基本信息/求职意向；
    * Upload 从简历文本提取；无法提取时回退为 "AI 生成简历"。
@@ -1164,6 +1280,12 @@ export class ResumeAiService {
         retryConfig,
         modules,
         resumeId,
+      );
+
+      // 保序重编号模块排序字段：消除 AI 输出的 globalSort 缺失/碰撞
+      // （失败仅告警，不阻断生成完成）
+      await this.normalizeDraftSortFields(resumeId).catch((err) =>
+        this.logger.warn('草稿排序字段归一化失败', (err as Error).message),
       );
 
       // 最终草稿结构校验（仅告警，不阻断）
@@ -1810,7 +1932,10 @@ export class ResumeAiService {
   async analyzeResume(analyzeResumeDto: AnalyzeResumeDto, userId: string) {
     const MAX_RETRIES = 2;
     const RETRY_DELAY_MS = 1500;
-    const STUCK_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+    const STUCK_TASK_TIMEOUT_MS = ResumeAiService.computeStuckTaskTimeoutMs(
+      MAX_RETRIES,
+      RETRY_DELAY_MS,
+    );
 
     const { resumeId, jobDescription } = analyzeResumeDto;
 
@@ -2051,7 +2176,10 @@ export class ResumeAiService {
   ) {
     const MAX_RETRIES = 2;
     const RETRY_DELAY_MS = 1500;
-    const STUCK_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+    const STUCK_TASK_TIMEOUT_MS = ResumeAiService.computeStuckTaskTimeoutMs(
+      MAX_RETRIES,
+      RETRY_DELAY_MS,
+    );
 
     const { resumeId, jobDescription, questionCount } = predictQuestionsDto;
 

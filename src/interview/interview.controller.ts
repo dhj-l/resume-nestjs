@@ -21,6 +21,7 @@ import {
   SubmitAnswerDto,
 } from './dto/create-interview-session.dto';
 import { ListInterviewSessionsDto } from './dto/list-interview-sessions.dto';
+import { InterviewTtsQueryDto } from './dto/interview-tts.dto';
 import { InterviewService, SseEvent } from './interview.service';
 
 @Controller('interview')
@@ -197,6 +198,31 @@ export class InterviewController {
   ) {
     try {
       return await this.interviewService.getReport(id, req.user.userId);
+    } catch (error) {
+      throw this.wrapError(error);
+    }
+  }
+
+  /**
+   * 获取指定轮次面试官问题的语音（wav 二进制流）
+   * 同会话同轮次音频内容不变，浏览器可按 max-age 缓存
+   */
+  @Get('sessions/:id/tts')
+  async getQuestionTts(
+    @Param('id') id: string,
+    @Query() query: InterviewTtsQueryDto,
+    @Req() req: { user: { userId: string } },
+    @Res() res: Response,
+  ): Promise<void> {
+    try {
+      const audio = await this.interviewService.getQuestionAudio(
+        id,
+        req.user.userId,
+        query.round,
+      );
+      res.setHeader('Content-Type', audio.mimeType);
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.send(audio.buffer);
     } catch (error) {
       throw this.wrapError(error);
     }
