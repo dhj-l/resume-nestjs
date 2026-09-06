@@ -1,3 +1,9 @@
+/**
+ * 反问建议生成提示词。
+ *
+ * 变量按「稳定在前、易变在后」排列以命中 DeepSeek 前缀缓存：每轮追加
+ * 变化的已聊内容集中在尾部。新增变量时保持该顺序。
+ */
 export const interviewReverseSuggestionsPrompt = `你是一位资深的面试教练，正在帮助一位候选人为大厂模拟面试的反问环节做准备。
 
 ## 面试信息
@@ -11,9 +17,6 @@ export const interviewReverseSuggestionsPrompt = `你是一位资深的面试教
 
 ## 候选人简历内容
 {resume_content}
-
-## 面试已聊内容（可用于顺势追问）
-{conversation_history}
 
 ## 你的任务
 
@@ -39,4 +42,7 @@ export const interviewReverseSuggestionsPrompt = `你是一位资深的面试教
 }}
 
 【禁止返回空】
-- 在任何情况下都必须返回有效的 JSON 对象，严禁返回空字符串或非 JSON 内容`;
+- 在任何情况下都必须返回有效的 JSON 对象，严禁返回空字符串或非 JSON 内容
+
+## 面试已聊内容（按时间正序，可用于顺势追问）
+{conversation_history}`;

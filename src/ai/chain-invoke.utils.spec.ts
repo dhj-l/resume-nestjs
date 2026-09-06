@@ -24,10 +24,10 @@ describe('invokeChainWithRetry - AI 链调用统一脚手架', () => {
 
     expect(result).toEqual({ answer: 42 });
     expect(chain.invoke).toHaveBeenCalledTimes(1);
-    // signal 应透传给链，供超时中止生效
+    // signal 应透传给链供超时中止生效，callbacks 携带缓存命中埋点
     expect(chain.invoke).toHaveBeenCalledWith(
       { question: 'q' },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), callbacks: expect.anything() },
     );
   });
 

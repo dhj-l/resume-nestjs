@@ -1,3 +1,11 @@
+/**
+ * 回合决策提示词。
+ *
+ * 变量按「稳定在前、易变在后」排列以命中 DeepSeek 前缀缓存：人设、JD、
+ * 简历、大纲与全部指令每轮逐字不变，构成可命中的长前缀；每轮变化的
+ * 对话记录、剩余主题、进度与结束政策集中在尾部实时区（对话记录是追加式
+ * 增长，故置于仍在递减变化的剩余主题之前）。新增变量时保持该顺序，勿插回前部。
+ */
 export const interviewQuestionPrompt = `你正在扮演一场真实的大厂技术面试中的面试官，与候选人进行一对一模拟面试。
 
 ## 你的面试官人设与考察配比
@@ -8,8 +16,6 @@ export const interviewQuestionPrompt = `你正在扮演一场真实的大厂技�
 
 - 面试模式：{mode_desc}
 - 经验层级：{experience_level_desc}
-- 面试进度：主体考察已进行 {elapsed_minutes} 分钟，已提问 {asked_count} 个问题
-- 结束政策：{end_policy_desc}
 
 ## 目标岗位 JD
 {jd}
@@ -19,12 +25,6 @@ export const interviewQuestionPrompt = `你正在扮演一场真实的大厂技�
 
 ## 本次面试考察大纲（含题型标注，按顺序推进）
 {outline_json}
-
-## 尚未覆盖的主题
-{remaining_topics}
-
-## 最近对话记录
-{conversation_history}
 
 ## 你的任务（每轮回答后执行，输出一个 JSON）
 
@@ -76,4 +76,16 @@ export const interviewQuestionPrompt = `你正在扮演一场真实的大厂技�
 4. 收尾语（shouldEndMainPhase=true 时）必须自然真实：像真实面试官一样先简短总结肯定，再引导反问，禁止生硬堆砌。
 
 【禁止返回空】
-- 在任何情况下都必须返回有效的 JSON 对象，严禁返回空字符串或非 JSON 内容`;
+- 在任何情况下都必须返回有效的 JSON 对象，严禁返回空字符串或非 JSON 内容
+
+## 实时面试状态（每轮更新，以本节内容为准）
+
+### 最近对话记录（按时间正序，最后一条为候选人刚提交的回答）
+{conversation_history}
+
+### 尚未覆盖的主题
+{remaining_topics}
+
+### 面试进度与结束政策
+- 进度：主体考察已进行 {elapsed_minutes} 分钟，已提问 {asked_count} 个问题
+- 结束政策：{end_policy_desc}`;
