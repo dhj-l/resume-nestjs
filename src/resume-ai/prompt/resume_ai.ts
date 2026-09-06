@@ -7,7 +7,6 @@
  * 新的模块化prompt位于以下位置：
  *
  * 1. 公共约束：src/resume-ai/prompt/common-constraints.ts
- *    - commonJsonConstraints: JSON格式约束和错误处理机制
  *    - commonHtmlRules: HTML标签使用规范
  *    - commonDateFormatRules: 日期格式规范
  *    - commonSortRules: 排序字段规范

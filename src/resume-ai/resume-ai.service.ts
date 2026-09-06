@@ -18,14 +18,12 @@ import { CreateResumeDto } from 'src/resume/dto/create-resume.dto';
 import { DocumentParserService } from './document-parser.service';
 import {
   MAX_LENGTH,
-  MIN_CHINESE_LENGTH,
-  MIN_ENGLISH_LENGTH,
-  MIN_PARAGRAPHS,
-  MIN_LINE_BREAKS,
   JD_KEYWORD_GROUPS,
   JD_REQUIRED_KEYWORD_COUNT,
-  PROHIBITED_TERMS,
   VALIDATION_MESSAGES,
+  getEffectiveMinLength,
+  hasDiscriminatoryContent,
+  hasEnoughParagraphs,
   matchKeywordGroup,
 } from './constants/job-validation.constants';
 import {
@@ -85,6 +83,18 @@ import {
   buildTruncatedAnalysisContext,
   normalizeAnalysisResult,
 } from './analysis.utils';
+import {
+  ResumeQuestionRecord,
+  QuestionStatusEnum,
+} from './entities/resume-question-record.entity';
+import { interviewQuestionsPrompt } from './prompt/interview-questions.prompt';
+import { PredictQuestionsDto } from './dto/predict-questions.dto';
+import {
+  InterviewQuestionSchema,
+  QUESTION_COUNT_MAX,
+  QUESTION_COUNT_MIN,
+  normalizeInterviewQuestions,
+} from './schemas/question.schema';
 
 /**
  * 将数组格式化为 Markdown 列表字符串，空数组返回「无」
@@ -107,6 +117,8 @@ export class ResumeAiService {
     private analysisRecordModel: Model<ResumeAnalysisRecord>,
     @InjectModel(AiUsageRecord.name)
     private aiUsageRecordModel: Model<AiUsageRecord>,
+    @InjectModel(ResumeQuestionRecord.name)
+    private questionRecordModel: Model<ResumeQuestionRecord>,
     private readonly aiService: AiService,
     private readonly documentParserService: DocumentParserService,
   ) {}
@@ -509,16 +521,16 @@ export class ResumeAiService {
     }
     const {
       _id,
-      _userId,
-      _user,
-      _createdAt,
-      _updatedAt,
+      userId: _userId,
+      user: _user,
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
       __v,
-      _isTemplate,
-      _cover,
-      _title,
-      _type,
-      _aiStatus,
+      isTemplate: _isTemplate,
+      cover: _cover,
+      title: _title,
+      type: _type,
+      aiStatus: _aiStatus,
       ...moduleData
     } = source;
     return { ...defaults, ...moduleData };
@@ -541,6 +553,122 @@ export class ResumeAiService {
         `草稿模块落库失败: ${moduleName}`,
         (error as Error).message,
       );
+    }
+  }
+
+  /**
+   * 参与排序的模块字段及 prompt 约定的默认序号
+   * （与 common-constraints 排序规范保持一致）
+   */
+  private static readonly SORTABLE_MODULE_SORT: ReadonlyArray<
+    readonly [string, number]
+  > = [
+    ['workExperience', 1],
+    ['projectExperience', 2],
+    ['educationBackground', 3],
+    ['internshipExperience', 4],
+    ['campusExperience', 5],
+    ['skills', 6],
+    ['certificates', 7],
+    ['selfEvaluation', 8],
+  ];
+
+  /**
+   * 提取模块的排序代表值
+   *
+   * 0 视为缺失：AI 遗漏 globalSort 时，落库的 $set 会被 schema 的
+   * default: 0 补齐（mongoose cast），lean 读出的值就是 0；且 prompt
+   * 约定合法值必须为正整数。0 若按真实值参与排序，缺失模块会排到
+   * 所有有效模块之前，破坏 AI 明确的模块顺序。
+   */
+  private static readRepresentativeSort(
+    value: any,
+    defaultSort: number,
+  ): number {
+    const raw = Number(value?.globalSort ?? 0);
+    return Number.isFinite(raw) && raw > 0 ? raw : defaultSort;
+  }
+
+  /**
+   * 挂起任务判定超时：必须大于重试链最坏耗时（(maxRetries+1) 次尝试 × 超时 + 指数退避总和），
+   * 否则仍在途的任务会被并发请求误判为挂起并重复发起
+   */
+  private static computeStuckTaskTimeoutMs(
+    maxRetries: number,
+    retryDelayMs: number,
+  ): number {
+    return (
+      (maxRetries + 1) * ANALYSIS_TIMEOUT_MS +
+      retryDelayMs * (Math.pow(2, maxRetries) - 1) +
+      60_000
+    );
+  }
+
+  /**
+   * 保序重编号草稿模块的排序字段
+   *
+   * AI 输出的 globalSort 可能缺失（落库补默认 0）或多个模块同值，
+   * 前端的"交换式排序"对相等值是空操作，导致模块排序无反应。
+   * 这里按各模块代表值稳定排序后重编为连续唯一值（1..n）：
+   * - 模块间相对顺序完全保留 AI 的设计（含个性化调整），仅收敛数值；
+   * - 缺失值按 prompt 默认序号补位参与排序；
+   * - 数组模块内条目统一为同一 globalSort，localSort 按既有顺序重编为 1..n。
+   */
+  private async normalizeDraftSortFields(resumeId: string): Promise<void> {
+    const draft = (await this.resumeModel.findById(resumeId).lean()) as any;
+    if (!draft) return;
+
+    // 收集参与排序的模块及其代表值（数组取首项，对象取字段值，0/缺失用默认序号）
+    const entries = ResumeAiService.SORTABLE_MODULE_SORT.map(
+      ([field, defaultSort]) => {
+        const value = draft[field];
+        let representative = defaultSort;
+        if (Array.isArray(value)) {
+          if (value.length) {
+            representative = ResumeAiService.readRepresentativeSort(
+              value[0],
+              defaultSort,
+            );
+          }
+        } else if (value && typeof value === 'object') {
+          representative = ResumeAiService.readRepresentativeSort(
+            value,
+            defaultSort,
+          );
+        }
+        return { field, defaultSort, representative };
+      },
+    );
+
+    // 按代表值稳定排序，同值按 prompt 默认序号决胜
+    entries.sort(
+      (a, b) =>
+        a.representative - b.representative || a.defaultSort - b.defaultSort,
+    );
+
+    // 重编号并写回（空数组无条目可写，跳过，占用的序号留空隙不影响唯一性）
+    const update: Record<string, any> = {};
+    entries.forEach((entry, rankIndex) => {
+      const rank = rankIndex + 1;
+      const value = draft[entry.field];
+      if (Array.isArray(value)) {
+        if (!value.length) return;
+        // 按既有 localSort 稳定排序后重编，保留条目相对顺序
+        const items = [...value].sort(
+          (a: any, b: any) => (a?.localSort ?? 0) - (b?.localSort ?? 0),
+        );
+        update[entry.field] = items.map((item: any, i: number) => ({
+          ...item,
+          globalSort: rank,
+          localSort: i + 1,
+        }));
+      } else if (value && typeof value === 'object') {
+        update[`${entry.field}.globalSort`] = rank;
+      }
+    });
+
+    if (Object.keys(update).length) {
+      await this.resumeModel.findByIdAndUpdate(resumeId, { $set: update });
     }
   }
 
@@ -673,22 +801,49 @@ export class ResumeAiService {
    */
   async getResumeRecords(userId: string, query: GetResumeRecordsDto) {
     try {
-      const { page = 1, pageSize = 10 } = query;
+      const { page = 1, pageSize = 10, status, keyword } = query;
       const skip = (page - 1) * pageSize;
+      const filter: Record<string, any> = { userId };
+      if (status) {
+        filter.status = status;
+      }
+      if (keyword) {
+        filter.jobDescription = {
+          $regex: this.escapeRegex(keyword),
+          $options: 'i',
+        };
+      }
       const [total, list] = await Promise.all([
-        this.resumeAiModel.countDocuments({ userId }),
+        this.resumeAiModel.countDocuments(filter),
         this.resumeAiModel
-          .find({ userId })
+          .find(filter)
           .select('-__v -resumeContent -generatedResumeDescription -detailInfo')
           .skip(skip)
           .limit(pageSize)
           .sort({ createdAt: -1 })
           .lean(),
       ]);
-      return { total, list: list.map(toResumeRecordResponse) };
+      return {
+        total,
+        list: list.map(toResumeRecordResponse),
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      };
     } catch (error: any) {
       throw new BadRequestException(error.message);
     }
+  }
+
+  /**
+   * 删除简历生成记录（仅删除记录，不影响关联简历）
+   */
+  async deleteResumeRecord(userId: string, id: string) {
+    const result = await this.resumeAiModel.deleteOne({ _id: id, userId });
+    if (!result.deletedCount) {
+      throw new BadRequestException('生成记录不存在或无权删除');
+    }
+    return { success: true };
   }
 
   /**
@@ -716,25 +871,13 @@ export class ResumeAiService {
       };
     }
 
-    const chineseCharCount = (jobDescription.match(/[\u4e00-\u9fa5]/g) || [])
-      .length;
-    const isChineseDominant = chineseCharCount > length * 0.3;
-    const effectiveMinLength = isChineseDominant
-      ? MIN_CHINESE_LENGTH
-      : MIN_ENGLISH_LENGTH;
-
-    if (length < effectiveMinLength) {
+    if (length < getEffectiveMinLength(jobDescription)) {
       errors.push(messages.tooShort);
     } else {
       score += 20;
     }
 
-    const paragraphs = jobDescription
-      .split(/\n\s*\n/)
-      .filter((p) => p.trim().length > 0);
-    const lineBreaks = (jobDescription.match(/\n/g) || []).length;
-
-    if (paragraphs.length < MIN_PARAGRAPHS && lineBreaks < MIN_LINE_BREAKS) {
+    if (!hasEnoughParagraphs(jobDescription)) {
       errors.push(messages.insufficientParagraphs);
     } else {
       score += 15;
@@ -756,17 +899,9 @@ export class ResumeAiService {
       errors.push(messages.missingKeywords);
     }
 
-    let hasDiscriminatoryContent = false;
-    const lowerJD = jobDescription.toLowerCase();
+    const hasProhibited = hasDiscriminatoryContent(jobDescription);
 
-    for (const term of PROHIBITED_TERMS) {
-      if (lowerJD.includes(term.toLowerCase())) {
-        hasDiscriminatoryContent = true;
-        break;
-      }
-    }
-
-    if (!hasDiscriminatoryContent) {
+    if (!hasProhibited) {
       score += 15;
     } else {
       errors.push(messages.discriminatoryContent);
@@ -775,7 +910,7 @@ export class ResumeAiService {
     const isValid =
       errors.length === 0 &&
       matchedGroups >= JD_REQUIRED_KEYWORD_COUNT &&
-      !hasDiscriminatoryContent;
+      !hasProhibited;
 
     const reason = isValid
       ? language === 'CN'
@@ -1010,6 +1145,7 @@ export class ResumeAiService {
       retryConfig,
       modules,
     ).catch((error: any) => {
+      this.logger.error('简历生成失败', error?.stack);
       // 发送错误消息
       const errorMessage: SseMessage = {
         type: 'error',
@@ -1021,7 +1157,9 @@ export class ResumeAiService {
         resumeId: error?.resumeId,
       };
       sseSubject.next(errorMessage);
-      sseSubject.error(error);
+      // 业务失败已通过 next 推送完整 error 消息（含 resumeId），
+      // 这里用 complete 正常结束流，避免再触发控制器 error 处理器写出第二帧丢失 resumeId。
+      sseSubject.complete();
       stopSignal.next();
       stopSignal.complete();
     });
@@ -1120,6 +1258,12 @@ export class ResumeAiService {
         retryConfig,
         modules,
         resumeId,
+      );
+
+      // 保序重编号模块排序字段：消除 AI 输出的 globalSort 缺失/碰撞
+      // （失败仅告警，不阻断生成完成）
+      await this.normalizeDraftSortFields(resumeId).catch((err) =>
+        this.logger.warn('草稿排序字段归一化失败', (err as Error).message),
       );
 
       // 最终草稿结构校验（仅告警，不阻断）
@@ -1287,7 +1431,7 @@ export class ResumeAiService {
       } catch (error: any) {
         lastError = error;
 
-        if (attempt < retryConfig.maxRetries) {
+        if (attempt < retryConfig.maxRetries - 1) {
           // 发送重试消息
           this.sendProgress(
             sseSubject,
@@ -1766,7 +1910,10 @@ export class ResumeAiService {
   async analyzeResume(analyzeResumeDto: AnalyzeResumeDto, userId: string) {
     const MAX_RETRIES = 2;
     const RETRY_DELAY_MS = 1500;
-    const STUCK_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+    const STUCK_TASK_TIMEOUT_MS = ResumeAiService.computeStuckTaskTimeoutMs(
+      MAX_RETRIES,
+      RETRY_DELAY_MS,
+    );
 
     const { resumeId, jobDescription } = analyzeResumeDto;
 
@@ -1924,16 +2071,33 @@ export class ResumeAiService {
   /**
    * 获取用户的简历分析记录列表
    */
-  async getAnalysisRecords(userId: string, page = 1, pageSize = 10) {
+  async getAnalysisRecords(
+    userId: string,
+    page = 1,
+    pageSize = 10,
+    status?: string,
+    keyword?: string,
+  ) {
     const skip = (page - 1) * pageSize;
+    const filter: Record<string, any> = { userId };
+    if (status) {
+      filter.status = status;
+    }
+    if (keyword) {
+      const regex = { $regex: this.escapeRegex(keyword), $options: 'i' };
+      filter.$or = [
+        { jobDescription: regex },
+        { 'analysisResult.meta.candidate_name': regex },
+      ];
+    }
     const [records, total] = await Promise.all([
       this.analysisRecordModel
-        .find({ userId })
+        .find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(pageSize)
         .lean(),
-      this.analysisRecordModel.countDocuments({ userId }),
+      this.analysisRecordModel.countDocuments(filter),
     ]);
 
     return {
@@ -1943,6 +2107,20 @@ export class ResumeAiService {
       pageSize,
       totalPages: Math.ceil(total / pageSize),
     };
+  }
+
+  /**
+   * 删除简历分析记录
+   */
+  async deleteAnalysisRecord(userId: string, id: string) {
+    const result = await this.analysisRecordModel.deleteOne({
+      _id: id,
+      userId,
+    });
+    if (!result.deletedCount) {
+      throw new BadRequestException('分析记录不存在或无权删除');
+    }
+    return { success: true };
   }
   /**
    * 获取用户的简历分析详情
@@ -1960,6 +2138,296 @@ export class ResumeAiService {
 
   async getLatestAnalysisByResumeId(resumeId: string, userId: string) {
     const data = await this.analysisRecordModel
+      .findOne({ resumeId, userId })
+      .sort({ createdAt: -1 })
+      .select('-__v')
+      .lean();
+    return data;
+  }
+
+  /**
+   * AI面试押题（带自动重试 + 输入截断 + 挂起任务恢复 + 数量/字数校验）
+   */
+  async predictInterviewQuestions(
+    predictQuestionsDto: PredictQuestionsDto,
+    userId: string,
+  ) {
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY_MS = 1500;
+    const STUCK_TASK_TIMEOUT_MS = ResumeAiService.computeStuckTaskTimeoutMs(
+      MAX_RETRIES,
+      RETRY_DELAY_MS,
+    );
+
+    const { resumeId, jobDescription, questionCount } = predictQuestionsDto;
+
+    // 服务层兜底校验（DTO 管道已校验，此处防止绕过管道直接调用）
+    if (
+      !Number.isInteger(questionCount) ||
+      questionCount < QUESTION_COUNT_MIN ||
+      questionCount > QUESTION_COUNT_MAX
+    ) {
+      throw new BadRequestException(
+        `题目数量必须在 ${QUESTION_COUNT_MIN}-${QUESTION_COUNT_MAX} 之间`,
+      );
+    }
+
+    // 校验 JD 内容
+    const { isValid, reason } = this.validateJobDescription(jobDescription);
+    if (!isValid) {
+      throw new BadRequestException(reason);
+    }
+
+    // 恢复超过 5 分钟的挂起押题任务
+    const stuckThreshold = new Date(Date.now() - STUCK_TASK_TIMEOUT_MS);
+    await this.questionRecordModel.updateMany(
+      {
+        userId,
+        status: QuestionStatusEnum.Generating,
+        createdAt: { $lt: stuckThreshold },
+      },
+      { status: QuestionStatusEnum.Failed, failReason: '任务超时自动恢复' },
+    );
+
+    // 检查是否有正在进行的押题任务
+    const existingRecord = await this.questionRecordModel.findOne({
+      userId,
+      status: QuestionStatusEnum.Generating,
+    });
+    if (existingRecord) {
+      throw new BadRequestException('存在正在进行的押题任务，请稍后重试');
+    }
+
+    // 查询简历
+    const resume = await this.resumeModel
+      .findOne({ _id: resumeId, userId })
+      .lean();
+    if (!resume) {
+      throw new BadRequestException('简历不存在');
+    }
+    const resumeDoc = resume as Record<string, any>;
+
+    // 从简历提取求职岗位与工作年限（缺失时由模型从简历内容推断）
+    const targetPosition =
+      resumeDoc.jobIntention?.jobIntention?.trim() ??
+      resumeDoc.jobIntention?.position?.trim() ??
+      '';
+    const workYears = resumeDoc.basicInfo?.workYear?.trim() ?? '';
+    const candidateName = resumeDoc.basicInfo?.name?.trim() ?? '';
+
+    // 创建押题记录
+    const record = await this.questionRecordModel.create({
+      resumeId,
+      jobDescription,
+      questionCount,
+      candidateName,
+      targetPosition,
+      workYears,
+      status: QuestionStatusEnum.Generating,
+      userId,
+    });
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const aiStartTime = Date.now();
+      try {
+        // 最后一次兜底尝试收紧输入预算，前两次使用常规预算
+        const inputBudget =
+          attempt === MAX_RETRIES
+            ? ANALYSIS_INPUT_BUDGET_FALLBACK
+            : ANALYSIS_INPUT_BUDGET;
+        const { resumeContent, jobDescription: truncatedJd } =
+          buildTruncatedAnalysisContext(resumeDoc, jobDescription, inputBudget);
+
+        const promptTemplate = PromptTemplate.fromTemplate(
+          interviewQuestionsPrompt,
+        );
+        const model = this.aiService.generateInterviewQuestions();
+        const parser = this.aiService.createRobustStructuredParser(
+          InterviewQuestionSchema,
+        );
+        const chain = promptTemplate.pipe(model).pipe(parser);
+
+        const controller = new AbortController();
+        const timeoutTimer = setTimeout(
+          () => controller.abort(),
+          ANALYSIS_TIMEOUT_MS,
+        );
+
+        let aiResult: Record<string, any>;
+        try {
+          const parsed = await chain.invoke(
+            {
+              jd: truncatedJd,
+              experience: resumeContent,
+              target_position:
+                targetPosition || '（简历中未明确，请根据 JD 推断）',
+              work_years: workYears || '（简历中未明确，请根据经历推断）',
+              question_count: String(questionCount),
+              current_date: formatDate(),
+            },
+            { signal: controller.signal },
+          );
+          aiResult = parsed as Record<string, any>;
+        } catch (error: any) {
+          if (controller.signal.aborted) {
+            throw new Error('AI押题超时');
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutTimer);
+        }
+
+        // 校验题目数量精确等于所选数量，且每题题目/解答非空、不超字数上限
+        const normalized = normalizeInterviewQuestions(aiResult, questionCount);
+        const { questions, overview, focusAreas, hotTopics, interviewTips } =
+          normalized;
+        const aiDuration = Date.now() - aiStartTime;
+
+        await this.questionRecordModel.findByIdAndUpdate(record._id, {
+          status: QuestionStatusEnum.Completed,
+          result: questions,
+          overview,
+          focusAreas,
+          hotTopics,
+          interviewTips,
+        });
+
+        this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.InterviewQuestionPrediction,
+          success: true,
+          duration: aiDuration,
+          resumeId,
+          metadata: {
+            questionRecordId: record._id.toString(),
+            questionCount,
+          },
+        });
+
+        return {
+          recordId: record._id,
+          result: questions,
+          overview,
+          focusAreas,
+          hotTopics,
+          interviewTips,
+        };
+      } catch (error: any) {
+        lastError = error;
+        this.recordAiUsage({
+          userId,
+          aiFunction: AiFunctionEnum.InterviewQuestionPrediction,
+          success: false,
+          duration: Date.now() - aiStartTime,
+          errorMessage: error.message,
+          resumeId,
+          metadata: {
+            questionRecordId: record._id.toString(),
+            questionCount,
+          },
+        });
+
+        if (attempt < MAX_RETRIES) {
+          this.logger.warn(
+            `predictInterviewQuestions 第 ${attempt + 1} 次失败，${MAX_RETRIES - attempt} 次重试剩余: ${error.message}`,
+          );
+          await this.sleep(RETRY_DELAY_MS * Math.pow(2, attempt));
+        }
+      }
+    }
+
+    // 所有重试均失败
+    try {
+      await this.questionRecordModel.findByIdAndUpdate(record._id, {
+        status: QuestionStatusEnum.Failed,
+        failReason: lastError?.message || '未知错误',
+      });
+    } catch {
+      // 状态更新失败不影响错误抛出
+    }
+    this.logger.error(`AI押题失败，已重试 ${MAX_RETRIES} 次`, lastError?.stack);
+    throw new BadRequestException(
+      `AI押题失败，已重试 ${MAX_RETRIES} 次: ${lastError?.message || '未知错误'}`,
+    );
+  }
+
+  /**
+   * 获取用户的押题记录列表（分页）
+   */
+  async getQuestionRecords(
+    userId: string,
+    page = 1,
+    pageSize = 10,
+    status?: string,
+    keyword?: string,
+  ) {
+    const skip = (page - 1) * pageSize;
+    const filter: Record<string, any> = { userId };
+    if (status) {
+      filter.status = status;
+    }
+    if (keyword) {
+      const regex = { $regex: this.escapeRegex(keyword), $options: 'i' };
+      filter.$or = [
+        { jobDescription: regex },
+        { targetPosition: regex },
+        { candidateName: regex },
+      ];
+    }
+    const [records, total] = await Promise.all([
+      this.questionRecordModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean(),
+      this.questionRecordModel.countDocuments(filter),
+    ]);
+
+    return {
+      list: records,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
+
+  /**
+   * 删除 AI 押题记录
+   */
+  async deleteQuestionRecord(userId: string, id: string) {
+    const result = await this.questionRecordModel.deleteOne({
+      _id: id,
+      userId,
+    });
+    if (!result.deletedCount) {
+      throw new BadRequestException('押题记录不存在或无权删除');
+    }
+    return { success: true };
+  }
+
+  /**
+   * 获取押题记录详情
+   */
+  async getQuestionDetailService(id: string, userId: string) {
+    const data = await this.questionRecordModel
+      .findOne({ _id: id, userId })
+      .select('-__v')
+      .lean();
+    if (!data) {
+      throw new BadRequestException('查询不到对应的押题数据');
+    }
+    return data;
+  }
+
+  /**
+   * 获取简历最近一次的押题记录
+   */
+  async getLatestQuestionsByResumeId(resumeId: string, userId: string) {
+    const data = await this.questionRecordModel
       .findOne({ resumeId, userId })
       .sort({ createdAt: -1 })
       .select('-__v')
@@ -2323,5 +2791,12 @@ export class ResumeAiService {
       byFunction: byFunctionMap,
       last30Days: last30DaysMap,
     };
+  }
+
+  /**
+   * 转义正则特殊字符，避免关键词搜索中的正则注入
+   */
+  private escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 }

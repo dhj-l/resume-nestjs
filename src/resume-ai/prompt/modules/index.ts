@@ -17,7 +17,6 @@ import { globalStylePrompt } from './global-style.prompt';
 
 // 公共约束
 export {
-  commonJsonConstraints,
   commonHtmlRules,
   commonDateFormatRules,
   commonSortRules,

@@ -48,7 +48,7 @@ jest.mock('puppeteer', () => ({
 }));
 
 jest.mock('fs', () => ({
-  readFileSync: jest.fn().mockReturnValue('/* mock tailwind css */'),
+  existsSync: jest.fn().mockReturnValue(false),
 }));
 
 /* ------------------------------------------------------------------ */
@@ -260,6 +260,19 @@ describe('ResumeService — Puppeteer 浏览器生命周期', () => {
 
       expect(Buffer.isBuffer(result)).toBe(true);
       expect(result.toString()).toBe('fake-pdf-content');
+    });
+
+    it('导出页应包含前端 html/css 且不注入 Tailwind 运行时脚本', async () => {
+      await callDownload();
+
+      expect(mockPage.setContent).toHaveBeenCalledTimes(1);
+      const content = mockPage.setContent.mock.calls[0][0] as string;
+      // 前端传来的样式自包含（构建时编译的 Tailwind 产物），应原样保留
+      expect(content).toContain('body { margin: 0; }');
+      expect(content).toContain('<div>test</div>');
+      // 注入 @tailwindcss/browser 运行时会注册类型化 @property，
+      // 导致前端渐变声明回退为透明色（背景丢失）
+      expect(content).not.toContain('<script');
     });
 
     it('page.pdf 出错时应在 finally 中关闭页面', async () => {
@@ -669,5 +682,60 @@ describe('ResumeService — 管理员方法', () => {
 
       expect(result.byType).toEqual({ default: 10 });
     });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  ResumeService — 用户简历列表 findAll                                */
+/* ------------------------------------------------------------------ */
+
+describe('ResumeService — 用户简历列表 findAll', () => {
+  let service: ResumeService;
+  let chainObj: any;
+
+  beforeEach(async () => {
+    chainObj = {
+      select: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+
+    const mockResumeModel = {
+      find: jest.fn().mockReturnValue(chainObj),
+      countDocuments: jest.fn().mockResolvedValue(2),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ResumeService,
+        { provide: getModelToken('Resume'), useValue: mockResumeModel },
+        { provide: getModelToken('Template'), useValue: buildMockModel() },
+        { provide: getModelToken('ResumeAi'), useValue: {} },
+        { provide: getModelToken('ResumeEditRecord'), useValue: {} },
+        { provide: getModelToken('ResumeAnalysisRecord'), useValue: {} },
+      ],
+    }).compile();
+
+    service = module.get<ResumeService>(ResumeService);
+  });
+
+  it('应返回分页列表并包含 aiStatus 字段', async () => {
+    const list = [
+      { _id: 'r1', title: '张三-前端', aiStatus: 'generating', userId: 'u1' },
+      { _id: 'r2', title: '李四-后端', aiStatus: '', userId: 'u1' },
+    ];
+    chainObj.exec.mockResolvedValue(list);
+
+    const result = await service.findAll('u1', { page: 1, pageSize: 6 });
+
+    expect(result.list).toEqual(list);
+    expect(result.total).toBe(2);
+    expect(chainObj.select).toHaveBeenCalledWith(
+      expect.arrayContaining(['aiStatus', '_id', 'title']),
+    );
+    expect(chainObj.skip).toHaveBeenCalledWith(0);
+    expect(chainObj.limit).toHaveBeenCalledWith(6);
   });
 });

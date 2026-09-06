@@ -44,6 +44,15 @@ describe('ResumeAiService - validateResumeContent', () => {
     create: jest.fn(),
   } as any;
 
+  const mockQuestionRecordModel = {
+    create: jest.fn(),
+    findOne: jest.fn(),
+    updateMany: jest.fn(),
+    findByIdAndUpdate: jest.fn(),
+    find: jest.fn(),
+    countDocuments: jest.fn(),
+  } as any;
+
   const mockAiService = {
     generateResume: jest.fn(),
     generateAnalyzeResume: jest.fn(),
@@ -78,6 +87,10 @@ describe('ResumeAiService - validateResumeContent', () => {
         {
           provide: 'AiUsageRecordModel',
           useValue: mockAiUsageRecordModel,
+        },
+        {
+          provide: 'ResumeQuestionRecordModel',
+          useValue: mockQuestionRecordModel,
         },
         {
           provide: AiService,
@@ -732,6 +745,14 @@ describe('ResumeAiService - validateResumeContent', () => {
         });
       });
 
+      // 修复：最后一次重试失败后不再发送"重试中"消息。
+      // maxRetries=3 时仅前两次失败发重试消息（retryCount=1、2），第三次失败直接放弃。
+      const retryingMessages = messages.filter((m) => m.status === 'retrying');
+      expect(retryingMessages).toHaveLength(2);
+      expect(Math.max(...retryingMessages.map((m) => m.retryCount ?? 0))).toBe(
+        2,
+      );
+
       const errorMessages = messages.filter((m) => m.type === 'error');
       expect(errorMessages.length).toBeGreaterThanOrEqual(1);
       expect(errorMessages[errorMessages.length - 1]).toMatchObject({
@@ -860,6 +881,11 @@ describe('ResumeAiService - validateResumeContent', () => {
       const sourceResume = {
         _id: 'resume-source-1',
         title: '李四的简历',
+        // 原简历（来自 lean()）携带的元数据，buildDraftData 必须剔除，避免污染草稿
+        cover: 'old-cover.png',
+        isTemplate: false,
+        createdAt: new Date('2023-01-01'),
+        updatedAt: new Date('2023-02-01'),
         basicInfo: {
           name: '李四',
           phone: '13900000000',
@@ -950,6 +976,11 @@ describe('ResumeAiService - validateResumeContent', () => {
       expect(createdResume.title).toBe('李四-后端工程师');
       // 草稿初始继承原简历数据（含已选模块的旧数据）
       expect(createdResume.workExperience).toEqual(sourceResume.workExperience);
+      // 修复：buildDraftData 必须剔除原简历元数据，避免草稿继承旧封面/创建时间/模板标记
+      expect(createdResume.cover).toBeUndefined();
+      expect(createdResume.isTemplate).toBeUndefined();
+      expect(createdResume.createdAt).toBeUndefined();
+      expect(createdResume.updatedAt).toBeUndefined();
       // 已选模块生成后通过增量更新写入新数据
       expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
         'resume-id-123',
@@ -1053,6 +1084,98 @@ describe('ResumeAiService - validateResumeContent', () => {
           resumeContent: '无有效简历信息',
         } as any),
       ).toBe('AI 生成简历');
+    });
+
+    describe('normalizeDraftSortFields - 草稿排序字段归一化', () => {
+      it('缺失值（落库补 0）按默认序号补位，不得抢占 AI 指定的顺序', async () => {
+        (mockResumeModel.findById as jest.Mock).mockReturnValue({
+          lean: jest.fn().mockResolvedValue({
+            workExperience: [{ name: 'A', globalSort: 2, localSort: 2 }],
+            // globalSort=0 是缺失字段落库时被 schema default 补齐的形态
+            projectExperience: [{ name: 'P', globalSort: 0, localSort: 1 }],
+            educationBackground: [{ name: 'E', globalSort: 1, localSort: 1 }],
+            skills: { content: 'a,b', globalSort: 0 },
+            certificates: { content: 'c', globalSort: 7 },
+          }),
+        });
+        (mockResumeModel.findByIdAndUpdate as jest.Mock).mockResolvedValue({});
+
+        await service['normalizeDraftSortFields']('resume-id-123');
+
+        // 缺失的 project/skills 按默认序号 2/6 参与排序，而非旧的 0 排最前；
+        // 重编号后 education=1、work=2、project=3；缺席的 internship/campus/
+        // selfEvaluation 占位 4/5/8（不写回），skills/certificates 保持 6/7
+        expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
+          'resume-id-123',
+          {
+            $set: {
+              educationBackground: [{ name: 'E', globalSort: 1, localSort: 1 }],
+              workExperience: [{ name: 'A', globalSort: 2, localSort: 1 }],
+              projectExperience: [{ name: 'P', globalSort: 3, localSort: 1 }],
+              'skills.globalSort': 6,
+              'certificates.globalSort': 7,
+            },
+          },
+        );
+      });
+
+      it('全部缺失时按 prompt 默认顺序重编号 1..8', async () => {
+        (mockResumeModel.findById as jest.Mock).mockReturnValue({
+          lean: jest.fn().mockResolvedValue({
+            workExperience: [{ name: 'A', globalSort: 0, localSort: 1 }],
+            projectExperience: [{ name: 'P', globalSort: 0, localSort: 1 }],
+            educationBackground: [{ name: 'E', globalSort: 0, localSort: 1 }],
+            internshipExperience: [{ name: 'I', globalSort: 0, localSort: 1 }],
+            campusExperience: [{ name: 'C', globalSort: 0, localSort: 1 }],
+            skills: { content: 'a,b', globalSort: 0 },
+            certificates: { content: 'c', globalSort: 0 },
+            selfEvaluation: { content: 's', globalSort: 0 },
+          }),
+        });
+        (mockResumeModel.findByIdAndUpdate as jest.Mock).mockResolvedValue({});
+
+        await service['normalizeDraftSortFields']('resume-id-123');
+
+        const update = (mockResumeModel.findByIdAndUpdate as jest.Mock).mock
+          .calls[0][1].$set;
+        expect(update.workExperience[0].globalSort).toBe(1);
+        expect(update.projectExperience[0].globalSort).toBe(2);
+        expect(update.educationBackground[0].globalSort).toBe(3);
+        expect(update.internshipExperience[0].globalSort).toBe(4);
+        expect(update.campusExperience[0].globalSort).toBe(5);
+        expect(update['skills.globalSort']).toBe(6);
+        expect(update['certificates.globalSort']).toBe(7);
+        expect(update['selfEvaluation.globalSort']).toBe(8);
+      });
+
+      it('空数组模块跳过写回，数组内 localSort 按既有相对顺序重编', async () => {
+        (mockResumeModel.findById as jest.Mock).mockReturnValue({
+          lean: jest.fn().mockResolvedValue({
+            workExperience: [
+              { name: 'A', globalSort: 5, localSort: 0 },
+              { name: 'B', globalSort: 5, localSort: 0 },
+            ],
+            campusExperience: [],
+          }),
+        });
+        (mockResumeModel.findByIdAndUpdate as jest.Mock).mockResolvedValue({});
+
+        await service['normalizeDraftSortFields']('resume-id-123');
+
+        // work=4：前方 project/education/internship 缺席但占号 1/2/3（不写回）；
+        // 空数组 campus 跳过写回；localSort 保持既有相对顺序重编为 1..2
+        expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
+          'resume-id-123',
+          {
+            $set: {
+              workExperience: [
+                { name: 'A', globalSort: 4, localSort: 1 },
+                { name: 'B', globalSort: 4, localSort: 2 },
+              ],
+            },
+          },
+        );
+      });
     });
   });
 });

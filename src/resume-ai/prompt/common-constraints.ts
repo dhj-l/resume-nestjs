@@ -1,12 +1,4 @@
 /**
- * 公共JSON格式约束和错误处理机制
- * 各模块prompt均需遵循此规范
- */
-export const commonJsonConstraints = `
-必须输出合法 JSON 对象，仅包含下方指定的字段，不得包含其他文本或 Markdown 代码块。
-`;
-
-/**
  * 公共HTML标签使用规范
  */
 export const commonHtmlRules = `

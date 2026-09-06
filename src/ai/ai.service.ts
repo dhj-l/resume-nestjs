@@ -88,13 +88,112 @@ export class AiService {
   }
 
   /**
-   * 简历生成AI模型
+   * 面试押题AI模型
+   *
+   * 输出规模受题目数量/字数上限约束，使用低温 + 关闭思考 + 中等 token 上限，
+   * 在保证 JSON 稳定性的同时控制 token 消耗。
    */
-  generateResumeDeepSeek() {
+  generateInterviewQuestions() {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
     const chat = this.createDefaultDeepSeek({
-      model: 'deepseek-chat',
       apiKey,
+      temperature: 0.3,
+      maxTokens: 12000,
+      thinking: 'disabled',
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
+    return chat;
+  }
+
+  /**
+   * 模拟面试考察大纲生成AI模型
+   *
+   * 输出为主题清单 JSON，使用低温 + 关闭思考 + JSON mode 保证结构稳定。
+   */
+  generateInterviewOutline() {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.3,
+      maxTokens: 8000,
+      thinking: 'disabled',
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
+    return chat;
+  }
+
+  /**
+   * 模拟面试出题/追问AI模型
+   *
+   * 承担三类对话式生成：回合决策（反馈+下一题）、反问环节面试官回应。
+   * 输出为 JSON 结构；需要结合候选人上一轮回答判断，默认开启 low 思考提升质量。
+   *
+   * 注意：思考模式下不可叠加 response_format=json_object，
+   * 否则模型会偶发性地把回答整体写入思考通道，正文 content 为空。
+   * JSON 稳定性由提示词 + createRobustStructuredParser 保证。
+   * @param mode 思考模式：disabled | low | medium | high
+   */
+  generateInterviewQuestion(mode?: DeepSeekThinkingMode) {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const thinkingMode = mode ?? this.resolveThinkingMode();
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.6,
+      maxTokens: 6000,
+      thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
+      reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
+      modelKwargs:
+        thinkingMode === 'disabled'
+          ? { response_format: { type: 'json_object' } }
+          : undefined,
+    });
+    return chat;
+  }
+
+  /**
+   * 模拟面试反问建议生成AI模型
+   *
+   * 输出为固定结构的建议清单 JSON，使用中低温 + 关闭思考 + JSON mode，
+   * 保证快速稳定（反问建议是轻量准备类能力，用户在面试中随时调用）。
+   */
+  generateInterviewSuggestions() {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.4,
+      maxTokens: 4000,
+      thinking: 'disabled',
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
+    });
+    return chat;
+  }
+
+  /**
+   * 模拟面试评价报告生成AI模型
+   *
+   * 需要综合全量对话给出逐主题评分与总评，默认 medium 思考保证报告质量。
+   * 与 generateInterviewQuestion 同理：思考模式下不叠加 response_format，
+   * 避免偶发空正文。
+   */
+  generateInterviewReport(mode?: DeepSeekThinkingMode) {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const thinkingMode = mode ?? 'medium';
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.2,
+      maxTokens: 16000,
+      thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
+      reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
+      modelKwargs:
+        thinkingMode === 'disabled'
+          ? { response_format: { type: 'json_object' } }
+          : undefined,
     });
     return chat;
   }
