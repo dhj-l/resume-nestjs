@@ -18,7 +18,10 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "seed:templates": "ts-node --project tsconfig.scripts.json scripts/seed-templates.ts"
+    "seed:templates": "ts-node --project tsconfig.scripts.json scripts/seed-templates.ts",
+    "verify:mimo-tts": "ts-node --project tsconfig.scripts.json scripts/verify-mimo-tts-stream.ts",
+    "verify:mimo-asr": "ts-node --project tsconfig.scripts.json scripts/verify-mimo-asr-stream.ts",
+    "verify:pdf-gradient": "ts-node --project tsconfig.scripts.json scripts/verify-pdf-gradient.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.1.26",

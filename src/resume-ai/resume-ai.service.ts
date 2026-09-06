@@ -18,14 +18,12 @@ import { CreateResumeDto } from 'src/resume/dto/create-resume.dto';
 import { DocumentParserService } from './document-parser.service';
 import {
   MAX_LENGTH,
-  MIN_CHINESE_LENGTH,
-  MIN_ENGLISH_LENGTH,
-  MIN_PARAGRAPHS,
-  MIN_LINE_BREAKS,
   JD_KEYWORD_GROUPS,
   JD_REQUIRED_KEYWORD_COUNT,
-  PROHIBITED_TERMS,
   VALIDATION_MESSAGES,
+  getEffectiveMinLength,
+  hasDiscriminatoryContent,
+  hasEnoughParagraphs,
   matchKeywordGroup,
 } from './constants/job-validation.constants';
 import {
@@ -873,25 +871,13 @@ export class ResumeAiService {
       };
     }
 
-    const chineseCharCount = (jobDescription.match(/[\u4e00-\u9fa5]/g) || [])
-      .length;
-    const isChineseDominant = chineseCharCount > length * 0.3;
-    const effectiveMinLength = isChineseDominant
-      ? MIN_CHINESE_LENGTH
-      : MIN_ENGLISH_LENGTH;
-
-    if (length < effectiveMinLength) {
+    if (length < getEffectiveMinLength(jobDescription)) {
       errors.push(messages.tooShort);
     } else {
       score += 20;
     }
 
-    const paragraphs = jobDescription
-      .split(/\n\s*\n/)
-      .filter((p) => p.trim().length > 0);
-    const lineBreaks = (jobDescription.match(/\n/g) || []).length;
-
-    if (paragraphs.length < MIN_PARAGRAPHS && lineBreaks < MIN_LINE_BREAKS) {
+    if (!hasEnoughParagraphs(jobDescription)) {
       errors.push(messages.insufficientParagraphs);
     } else {
       score += 15;
@@ -913,17 +899,9 @@ export class ResumeAiService {
       errors.push(messages.missingKeywords);
     }
 
-    let hasDiscriminatoryContent = false;
-    const lowerJD = jobDescription.toLowerCase();
+    const hasProhibited = hasDiscriminatoryContent(jobDescription);
 
-    for (const term of PROHIBITED_TERMS) {
-      if (lowerJD.includes(term.toLowerCase())) {
-        hasDiscriminatoryContent = true;
-        break;
-      }
-    }
-
-    if (!hasDiscriminatoryContent) {
+    if (!hasProhibited) {
       score += 15;
     } else {
       errors.push(messages.discriminatoryContent);
@@ -932,7 +910,7 @@ export class ResumeAiService {
     const isValid =
       errors.length === 0 &&
       matchedGroups >= JD_REQUIRED_KEYWORD_COUNT &&
-      !hasDiscriminatoryContent;
+      !hasProhibited;
 
     const reason = isValid
       ? language === 'CN'

@@ -48,7 +48,6 @@ jest.mock('puppeteer', () => ({
 }));
 
 jest.mock('fs', () => ({
-  readFileSync: jest.fn().mockReturnValue('/* mock tailwind css */'),
   existsSync: jest.fn().mockReturnValue(false),
 }));
 
@@ -261,6 +260,19 @@ describe('ResumeService — Puppeteer 浏览器生命周期', () => {
 
       expect(Buffer.isBuffer(result)).toBe(true);
       expect(result.toString()).toBe('fake-pdf-content');
+    });
+
+    it('导出页应包含前端 html/css 且不注入 Tailwind 运行时脚本', async () => {
+      await callDownload();
+
+      expect(mockPage.setContent).toHaveBeenCalledTimes(1);
+      const content = mockPage.setContent.mock.calls[0][0] as string;
+      // 前端传来的样式自包含（构建时编译的 Tailwind 产物），应原样保留
+      expect(content).toContain('body { margin: 0; }');
+      expect(content).toContain('<div>test</div>');
+      // 注入 @tailwindcss/browser 运行时会注册类型化 @property，
+      // 导致前端渐变声明回退为透明色（背景丢失）
+      expect(content).not.toContain('<script');
     });
 
     it('page.pdf 出错时应在 finally 中关闭页面', async () => {

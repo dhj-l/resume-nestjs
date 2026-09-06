@@ -7,34 +7,51 @@ import {
   IsString,
   Length,
   MaxLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import {
   ExperienceLevelEnum,
-  InterviewFocusEnum,
+  InterviewModeEnum,
+  InterviewStageEnum,
 } from '../constants/level.constants';
 import { MessageChannelEnum } from '../entities/interview-session.entity';
 import { JD_LENGTH_CONSTRAINT } from '../utils/job-description.validator';
 
 /**
  * 面试级别配置 DTO（多维度组合）
+ *
+ * mode + stage 决定面试官人设与考察配比；
+ * 校招模式经验层级固定为 junior（服务端归一化），社招模式必须显式选择。
  */
 export class LevelConfigDto {
   /**
-   * 经验层级：junior(校招) / mid(1-3年) / senior(3-5年) / expert(5年+)
+   * 面试模式：campus(校招) / experienced(社招)
    */
+  @IsEnum(InterviewModeEnum, {
+    message: 'mode 必须是 campus/experienced 之一',
+  })
+  mode: InterviewModeEnum;
+
+  /**
+   * 面试轮次：first(一面·基础技术面) / second(二面·项目深入面) / third(三面·综合面)
+   */
+  @IsEnum(InterviewStageEnum, {
+    message: 'stage 必须是 first/second/third 之一',
+  })
+  stage: InterviewStageEnum;
+
+  /**
+   * 经验层级：mid(1-3年) / senior(3-5年) / expert(5年+)
+   *
+   * 社招模式必填；校招模式无需传（服务端固定 junior）
+   */
+  @ValidateIf((o) => o.mode === InterviewModeEnum.Experienced)
   @IsEnum(ExperienceLevelEnum, {
     message: 'experienceLevel 必须是 junior/mid/senior/expert 之一',
   })
-  experienceLevel: ExperienceLevelEnum;
-
-  /**
-   * 考察侧重：technical(技术面) / project(项目深挖) / mixed(综合)
-   */
-  @IsEnum(InterviewFocusEnum, {
-    message: 'focus 必须是 technical/project/mixed 之一',
-  })
-  focus: InterviewFocusEnum;
+  @IsNotEmpty({ message: '社招模式必须选择经验层级（mid/senior/expert）' })
+  experienceLevel?: ExperienceLevelEnum;
 }
 
 /**
@@ -69,7 +86,7 @@ export class CreateInterviewSessionDto {
  */
 export class SubmitAnswerDto {
   /**
-   * 回答内容
+   * 回答内容（主体考察阶段为回答；反问环节为候选人提出的问题）
    */
   @IsString()
   @IsNotEmpty({ message: '回答内容不能为空' })

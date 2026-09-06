@@ -4,7 +4,8 @@ import { AiService } from 'src/ai/ai.service';
 import { QuestionEngineService } from './question-engine.service';
 import {
   ExperienceLevelEnum,
-  InterviewFocusEnum,
+  InterviewModeEnum,
+  InterviewStageEnum,
 } from '../constants/level.constants';
 import type { InterviewMessage } from '../entities/interview-session.entity';
 import {
@@ -18,18 +19,32 @@ describe('QuestionEngineService - 出题引擎', () => {
   const mockAiService = {
     generateInterviewOutline: jest.fn(),
     generateInterviewQuestion: jest.fn(),
+    generateInterviewSuggestions: jest.fn(),
     createRobustStructuredParser: jest.fn(),
   } as any;
 
   const levelConfig = {
+    mode: InterviewModeEnum.Experienced,
+    stage: InterviewStageEnum.First,
     experienceLevel: ExperienceLevelEnum.Mid,
-    focus: InterviewFocusEnum.Technical,
   };
 
   const outline = [
-    { key: 'nodejs_basics', title: 'Node.js 基础', difficulty: '基础' },
-    { key: 'database', title: '数据库设计', difficulty: '进阶' },
-    { key: 'project_architecture', title: '架构设计', difficulty: '高阶' },
+    {
+      key: 'self_intro',
+      title: '自我介绍',
+      questionType: 'self_intro',
+    },
+    {
+      key: 'order_system_refactor',
+      title: '订单系统重构',
+      questionType: 'project',
+    },
+    {
+      key: 'tcp_handshake',
+      title: 'TCP 三次握手',
+      questionType: 'fundamentals',
+    },
   ];
 
   beforeAll(async () => {
@@ -46,50 +61,66 @@ describe('QuestionEngineService - 出题引擎', () => {
     jest.clearAllMocks();
   });
 
-  describe('resolveTargetRounds', () => {
-    it('should map each focus to its configured target rounds', () => {
-      expect(service.resolveTargetRounds(levelConfig)).toBe(8);
-      expect(
-        service.resolveTargetRounds({
-          experienceLevel: ExperienceLevelEnum.Senior,
-          focus: InterviewFocusEnum.Project,
-        }),
-      ).toBe(6);
-      expect(
-        service.resolveTargetRounds({
-          experienceLevel: ExperienceLevelEnum.Junior,
-          focus: InterviewFocusEnum.Mixed,
-        }),
-      ).toBe(10);
-    });
-  });
+  const setupModel = (mockFn: jest.Mock, outputs: Array<unknown | Error>) => {
+    let attempts = 0;
+    mockFn.mockImplementation(() =>
+      RunnableLambda.from(async () => {
+        const output = outputs[Math.min(attempts, outputs.length - 1)];
+        attempts++;
+        if (output instanceof Error) {
+          throw output;
+        }
+        return JSON.stringify(output);
+      }),
+    );
+    mockAiService.createRobustStructuredParser.mockReturnValue(
+      RunnableLambda.from(async (input: any) =>
+        typeof input === 'string' ? JSON.parse(input) : input,
+      ),
+    );
+    return { getAttempts: () => attempts };
+  };
 
   describe('generateOutline', () => {
-    const mockChain = (result: unknown) => {
-      mockAiService.generateInterviewOutline.mockReturnValue(
-        RunnableLambda.from(async () => JSON.stringify(result)),
-      );
-      mockAiService.createRobustStructuredParser.mockReturnValue(
-        RunnableLambda.from(async (text: string) => JSON.parse(text)),
-      );
-    };
+    it('should generate an outline and normalize questionType', async () => {
+      // AI 漏标题型 / 误标 reverse 时应被归一化；首主题强制 self_intro
+      setupModel(mockAiService.generateInterviewOutline, [
+        {
+          topics: [
+            { key: 'intro', title: '开场', questionType: 'reverse' },
+            { key: 'legacy_project', title: '项目拆解' },
+            {
+              key: 'tcp',
+              title: 'TCP',
+              questionType: 'fundamentals',
+            },
+          ],
+        },
+      ]);
 
-    it('should generate and normalize an outline', async () => {
-      mockChain({ topics: outline });
       const result = await service.generateOutline({
         jobDescription: '负责后端服务开发，要求熟悉 Node.js 与数据库设计',
         resume: { basicInfo: { name: '张三' } },
         levelConfig,
       });
-      expect(result).toEqual(outline);
+
+      expect(result[0].questionType).toBe('self_intro');
+      expect(result[1].questionType).toBe('project');
+      expect(result[2].questionType).toBe('fundamentals');
     });
 
     it('should retry when AI returns empty topics then succeed', async () => {
-      mockAiService.generateInterviewOutline
-        .mockReturnValueOnce(RunnableLambda.from(async () => '{"topics":[]}'))
-        .mockReturnValueOnce(
-          RunnableLambda.from(async () => JSON.stringify({ topics: outline })),
-        );
+      let attempts = 0;
+      mockAiService.generateInterviewOutline.mockImplementation(() =>
+        RunnableLambda.from(async () => {
+          attempts++;
+          return JSON.stringify(
+            attempts === 1
+              ? { topics: [] }
+              : { topics: [{ key: 'a', title: '主题' }] },
+          );
+        }),
+      );
       mockAiService.createRobustStructuredParser.mockReturnValue(
         RunnableLambda.from(async (text: string) => JSON.parse(text)),
       );
@@ -99,13 +130,17 @@ describe('QuestionEngineService - 出题引擎', () => {
         resume: {},
         levelConfig,
       });
-      expect(mockAiService.generateInterviewOutline).toHaveBeenCalledTimes(2);
-      expect(result).toEqual(outline);
+      expect(attempts).toBe(2);
+      expect(result[0].questionType).toBe('self_intro');
     });
 
     it('should throw after exhausting retries', async () => {
-      mockAiService.generateInterviewOutline.mockReturnValue(
-        RunnableLambda.from(async () => '{"topics":[]}'),
+      let attempts = 0;
+      mockAiService.generateInterviewOutline.mockImplementation(() =>
+        RunnableLambda.from(async () => {
+          attempts++;
+          return '{"topics":[]}';
+        }),
       );
       mockAiService.createRobustStructuredParser.mockReturnValue(
         RunnableLambda.from(async (text: string) => JSON.parse(text)),
@@ -118,63 +153,102 @@ describe('QuestionEngineService - 出题引擎', () => {
           levelConfig,
         }),
       ).rejects.toThrow();
-      expect(mockAiService.generateInterviewOutline).toHaveBeenCalledTimes(3);
+      // 首次 + 2 次重试
+      expect(attempts).toBe(3);
     });
   });
 
-  describe('generateNextQuestion', () => {
+  describe('generateTurn - 回合决策', () => {
     const messages: InterviewMessage[] = [
       {
         role: MessageRoleEnum.Interviewer,
-        content: '请介绍一下事件循环机制。',
+        content: '请先简单介绍一下你在订单系统中承担的角色。',
         round: 1,
         kind: MessageKindEnum.Question,
       } as InterviewMessage,
       {
         role: MessageRoleEnum.Candidate,
-        content: '事件循环包括宏任务和微任务队列……但我说不太清楚优先级。',
+        content: '我负责了订单系统的重构，用了分库分表……但没做量化统计。',
         round: 1,
         kind: MessageKindEnum.Answer,
       } as InterviewMessage,
     ];
 
-    it('should return the next question decision', async () => {
-      const decision = {
-        topicKey: 'nodejs_basics',
-        question: '那宏任务和微任务的执行顺序你能展开讲讲吗？',
-        isFollowUp: true,
-        shouldEndInterview: false,
-      };
-      mockAiService.generateInterviewQuestion.mockReturnValue(
-        RunnableLambda.from(async () => JSON.stringify(decision)),
-      );
-      mockAiService.createRobustStructuredParser.mockReturnValue(
-        RunnableLambda.from(async (text: string) => JSON.parse(text)),
-      );
+    const validTurn = {
+      feedback: {
+        completeness: 70,
+        logic: 85,
+        depth: 55,
+        comment: '讲清了方案，缺少量化数据',
+      },
+      topicKey: 'order_system_refactor',
+      question: '重构后 QPS 提升了多少？',
+      questionType: 'project',
+      isFollowUp: true,
+      shouldEndMainPhase: false,
+    };
 
-      const result = await service.generateNextQuestion({
+    it('should return the turn decision with feedback', async () => {
+      setupModel(mockAiService.generateInterviewQuestion, [validTurn]);
+
+      const result = await service.generateTurn({
         jobDescription: '负责后端服务开发，要求熟悉 Node.js 与数据库设计',
         resume: {},
         levelConfig,
         outline,
         messages,
-        askedTopicKeys: ['nodejs_basics'],
-        round: 2,
+        askedTopicKeys: ['self_intro'],
+        elapsedMinutes: 12,
+        askedCount: 2,
+        endPolicy: 'cannot_end',
       });
 
+      expect(result.feedback.completeness).toBe(70);
       expect(result.isFollowUp).toBe(true);
-      expect(result.topicKey).toBe('nodejs_basics');
+      expect(result.topicKey).toBe('order_system_refactor');
     });
 
-    it('should pass remaining topics excluding already asked ones', async () => {
+    it('should inject elapsed time, asked count and end policy into the prompt', async () => {
+      let capturedPrompt = '';
+      mockAiService.generateInterviewQuestion.mockImplementation(() =>
+        RunnableLambda.from(async (promptValue: { toString(): string }) => {
+          capturedPrompt = String(promptValue);
+          return JSON.stringify(validTurn);
+        }),
+      );
+      mockAiService.createRobustStructuredParser.mockReturnValue(
+        RunnableLambda.from(async (input: any) =>
+          typeof input === 'string' ? JSON.parse(input) : input,
+        ),
+      );
+
+      await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: [],
+        elapsedMinutes: 35,
+        askedCount: 16,
+        endPolicy: 'can_end',
+      });
+
+      expect(capturedPrompt).toContain('已进行 35 分钟');
+      expect(capturedPrompt).toContain('已提问 16 个问题');
+      expect(capturedPrompt).toContain('可以结束');
+    });
+
+    it('should describe the must_end policy as mandatory transition', async () => {
       let capturedPrompt = '';
       mockAiService.generateInterviewQuestion.mockImplementation(() =>
         RunnableLambda.from(async (promptValue: { toString(): string }) => {
           capturedPrompt = String(promptValue);
           return JSON.stringify({
-            topicKey: 'database',
-            question: '下一题',
-            isFollowUp: false,
+            ...validTurn,
+            question: '今天的面试就到这里，你有什么想问我的吗？',
+            questionType: 'reverse',
+            shouldEndMainPhase: true,
           });
         }),
       );
@@ -184,28 +258,345 @@ describe('QuestionEngineService - 出题引擎', () => {
         ),
       );
 
-      await service.generateNextQuestion({
-        jobDescription: '负责后端服务开发，要求熟悉 Node.js 与数据库设计',
+      await service.generateTurn({
+        jobDescription: '负责后端服务开发',
         resume: {},
         levelConfig,
         outline,
         messages,
-        askedTopicKeys: ['nodejs_basics'],
-        round: 2,
+        askedTopicKeys: [],
+        elapsedMinutes: 62,
+        askedCount: 18,
+        endPolicy: 'must_end',
+      });
+
+      expect(capturedPrompt).toContain('必须结束');
+    });
+
+    it('should pass remaining topics excluding already asked ones', async () => {
+      let capturedPrompt = '';
+      setupModelPromptCapture(
+        mockAiService.generateInterviewQuestion,
+        (p) => {
+          capturedPrompt = p;
+        },
+        validTurn,
+      );
+
+      await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: ['self_intro', 'order_system_refactor'],
+        elapsedMinutes: 10,
+        askedCount: 3,
+        endPolicy: 'cannot_end',
       });
 
       // 已考察主题不应出现在"尚未覆盖主题"中
       const remainingSection = capturedPrompt.split('## 尚未覆盖的主题')[1];
-      expect(remainingSection).toContain('database');
-      expect(remainingSection).toContain('project_architecture');
+      expect(remainingSection).toContain('tcp_handshake');
       expect(
         remainingSection
           .slice(0, remainingSection.indexOf('##'))
-          .includes('nodejs_basics'),
+          .includes('order_system_refactor'),
       ).toBe(false);
-      // 对话历史应包含面试官与候选人的发言
-      expect(capturedPrompt).toContain('面试官');
-      expect(capturedPrompt).toContain('候选人');
+    });
+
+    it('should tell the model to improvise beyond the outline instead of sending an empty array', async () => {
+      let capturedPrompt = '';
+      setupModelPromptCapture(
+        mockAiService.generateInterviewQuestion,
+        (p) => {
+          capturedPrompt = p;
+        },
+        validTurn,
+      );
+
+      await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: outline.map((topic) => topic.key),
+        elapsedMinutes: 20,
+        askedCount: 15,
+        endPolicy: 'cannot_end',
+      });
+
+      const remainingSection = capturedPrompt.split('## 尚未覆盖的主题')[1];
+      expect(
+        remainingSection.slice(0, remainingSection.indexOf('##')).trim(),
+      ).toContain('自主出题');
+      expect(
+        remainingSection.slice(0, remainingSection.indexOf('##')),
+      ).not.toContain('[]');
+    });
+
+    it('should reject a decision without feedback', async () => {
+      setupModel(mockAiService.generateInterviewQuestion, [
+        { topicKey: 'a', question: '下一题？', isFollowUp: false },
+      ]);
+
+      await expect(
+        service.generateTurn({
+          jobDescription: '负责后端服务开发',
+          resume: {},
+          levelConfig,
+          outline,
+          messages,
+          askedTopicKeys: [],
+          elapsedMinutes: 10,
+          askedCount: 3,
+          endPolicy: 'cannot_end',
+        }),
+      ).rejects.toThrow('回合决策');
+    });
+
+    it('should retry a decision that omits topicKey while continuing the interview', async () => {
+      // 出题/追问必须携带 topicKey，否则主题覆盖追踪（askedTopicKeys）出现缺口；
+      // 缺失应触发校验重试而不是静默通过
+      const { getAttempts } = setupModel(
+        mockAiService.generateInterviewQuestion,
+        [{ ...validTurn, topicKey: undefined }, validTurn],
+      );
+
+      const result = await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: [],
+        elapsedMinutes: 10,
+        askedCount: 3,
+        endPolicy: 'cannot_end',
+      });
+
+      expect(getAttempts()).toBe(2);
+      expect(result.topicKey).toBe('order_system_refactor');
+    });
+
+    it('should retry a compound question with multiple question marks', async () => {
+      // 一轮连环问会让候选人无法逐点作答，必须触发重试让模型改为一次只问一个问题
+      const { getAttempts } = setupModel(
+        mockAiService.generateInterviewQuestion,
+        [
+          {
+            ...validTurn,
+            question:
+              'ref 和 reactive 的本质区别是什么？为何 ref 要设计成 .value 访问？',
+          },
+          validTurn,
+        ],
+      );
+
+      const result = await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: [],
+        elapsedMinutes: 10,
+        askedCount: 3,
+        endPolicy: 'cannot_end',
+      });
+
+      expect(getAttempts()).toBe(2);
+      expect(result.question).toBe('重构后 QPS 提升了多少？');
+    });
+
+    it('should not treat optional chaining or nullish operators as extra questions', async () => {
+      // a?.b 与 a ?? b 是 JS 运算符，不应被问号计数误判为连环问
+      const question =
+        '请说说 a?.b 与 a ?? b 这两个写法在运行时的行为有什么区别？';
+      setupModel(mockAiService.generateInterviewQuestion, [
+        { ...validTurn, question },
+      ]);
+
+      const result = await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: [],
+        elapsedMinutes: 10,
+        askedCount: 3,
+        endPolicy: 'cannot_end',
+      });
+
+      expect(result.question).toBe(question);
+    });
+
+    it('should accept a closing decision without topicKey', async () => {
+      // 收尾语（shouldEndMainPhase=true）没有考察主题，无需 topicKey
+      setupModel(mockAiService.generateInterviewQuestion, [
+        {
+          ...validTurn,
+          topicKey: undefined,
+          questionType: 'reverse',
+          question: '今天聊得很好，你有什么想问我的吗？',
+          shouldEndMainPhase: true,
+        },
+      ]);
+
+      const result = await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: [],
+        elapsedMinutes: 35,
+        askedCount: 16,
+        endPolicy: 'can_end',
+      });
+
+      expect(result.shouldEndMainPhase).toBe(true);
+      expect(result.topicKey).toBeUndefined();
     });
   });
+
+  describe('generateReverseResponse - 反问环节', () => {
+    it('should return the interviewer response and continue flag', async () => {
+      setupModel(mockAiService.generateInterviewQuestion, [
+        {
+          response: '团队目前 12 个人，你还有什么想了解的吗？',
+          continueReverse: true,
+        },
+      ]);
+
+      const result = await service.generateReverseResponse({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        messages: [
+          {
+            role: MessageRoleEnum.Candidate,
+            content: '想了解一下团队现在有多少人？',
+            round: 2,
+            kind: MessageKindEnum.Answer,
+            questionType: 'reverse',
+          } as InterviewMessage,
+        ],
+        reverseCount: 1,
+      });
+
+      expect(result.continueReverse).toBe(true);
+      expect(result.response).toContain('12 个人');
+    });
+
+    it('should inject the experience level into the reverse prompt like the other chains', async () => {
+      // 与大纲/回合决策/反问建议链保持同一套变量，避免副本间行为分叉
+      let capturedPrompt = '';
+      setupModelPromptCapture(
+        mockAiService.generateInterviewQuestion,
+        (p) => {
+          capturedPrompt = p;
+        },
+        { response: '好的', continueReverse: true },
+      );
+
+      await service.generateReverseResponse({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        messages: [],
+        reverseCount: 1,
+      });
+
+      expect(capturedPrompt).toContain('经验层级：1-3 年经验');
+    });
+
+    it('should retry after an empty response then succeed', async () => {
+      setupModel(mockAiService.generateInterviewQuestion, [
+        { response: '', continueReverse: true },
+        { response: '好的，感谢参加。', continueReverse: false },
+      ]);
+
+      const result = await service.generateReverseResponse({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        messages: [],
+        reverseCount: 1,
+      });
+
+      expect(result.continueReverse).toBe(false);
+      expect(result.response).toContain('感谢');
+    });
+  });
+
+  describe('generateReverseSuggestions - 反问建议', () => {
+    it('should return suggestions list', async () => {
+      setupModel(mockAiService.generateInterviewSuggestions, [
+        {
+          suggestions: [
+            { title: '团队技术栈', content: '想了解团队核心的技术栈？' },
+            { title: '成长路径', content: '新人的成长路径是怎样的？' },
+            { title: '业务挑战', content: '业务目前最大的挑战是什么？' },
+          ],
+        },
+      ]);
+
+      const result = await service.generateReverseSuggestions({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        messages: [],
+      });
+
+      expect(result).toHaveLength(3);
+      expect(result[0].title).toBe('团队技术栈');
+    });
+
+    it('should throw after exhausting retries with empty suggestions', async () => {
+      let attempts = 0;
+      mockAiService.generateInterviewSuggestions.mockImplementation(() =>
+        RunnableLambda.from(async () => {
+          attempts++;
+          return '{"suggestions":[]}';
+        }),
+      );
+      mockAiService.createRobustStructuredParser.mockReturnValue(
+        RunnableLambda.from(async (input: any) =>
+          typeof input === 'string' ? JSON.parse(input) : input,
+        ),
+      );
+
+      await expect(
+        service.generateReverseSuggestions({
+          jobDescription: '负责后端服务开发',
+          resume: {},
+          levelConfig,
+          messages: [],
+        }),
+      ).rejects.toThrow();
+      expect(attempts).toBe(3);
+    });
+  });
+
+  /** 捕获送入模型的 prompt 便于断言模板变量 */
+  function setupModelPromptCapture(
+    mockFn: jest.Mock,
+    capture: (prompt: string) => void,
+    output: unknown,
+  ) {
+    mockFn.mockImplementation(() =>
+      RunnableLambda.from(async (promptValue: { toString(): string }) => {
+        capture(String(promptValue));
+        return JSON.stringify(output);
+      }),
+    );
+    mockAiService.createRobustStructuredParser.mockReturnValue(
+      RunnableLambda.from(async (input: any) =>
+        typeof input === 'string' ? JSON.parse(input) : input,
+      ),
+    );
+  }
 });

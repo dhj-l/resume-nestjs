@@ -129,8 +129,8 @@ export class AiService {
   /**
    * 模拟面试出题/追问AI模型
    *
-   * 对话式逐题生成，输出为 JSON 结构的题目对象；
-   * 追问决策需要结合候选人上一轮回答判断，默认开启 low 思考提升质量。
+   * 承担三类对话式生成：回合决策（反馈+下一题）、反问环节面试官回应。
+   * 输出为 JSON 结构；需要结合候选人上一轮回答判断，默认开启 low 思考提升质量。
    *
    * 注意：思考模式下不可叠加 response_format=json_object，
    * 否则模型会偶发性地把回答整体写入思考通道，正文 content 为空。
@@ -150,6 +150,26 @@ export class AiService {
         thinkingMode === 'disabled'
           ? { response_format: { type: 'json_object' } }
           : undefined,
+    });
+    return chat;
+  }
+
+  /**
+   * 模拟面试反问建议生成AI模型
+   *
+   * 输出为固定结构的建议清单 JSON，使用中低温 + 关闭思考 + JSON mode，
+   * 保证快速稳定（反问建议是轻量准备类能力，用户在面试中随时调用）。
+   */
+  generateInterviewSuggestions() {
+    const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
+    const chat = this.createDefaultDeepSeek({
+      apiKey,
+      temperature: 0.4,
+      maxTokens: 4000,
+      thinking: 'disabled',
+      modelKwargs: {
+        response_format: { type: 'json_object' },
+      },
     });
     return chat;
   }

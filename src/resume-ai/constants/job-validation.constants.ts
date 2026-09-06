@@ -253,3 +253,28 @@ export const VALIDATION_MESSAGES = {
       'Discriminatory content detected. Please revise and resubmit.',
   },
 };
+
+/**
+ * 按中英文占比返回最低长度要求（中文占优用中文门槛，否则用英文门槛）。
+ * 押题分析（resume-ai）与模拟面试（interview）共用同一判定。
+ */
+export function getEffectiveMinLength(text: string): number {
+  const chineseCharCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const isChineseDominant = chineseCharCount > text.length * 0.3;
+  return isChineseDominant ? MIN_CHINESE_LENGTH : MIN_ENGLISH_LENGTH;
+}
+
+/** 是否具备足够的段落结构（空行分段或换行数达标） */
+export function hasEnoughParagraphs(text: string): boolean {
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+  const lineBreaks = (text.match(/\n/g) || []).length;
+  return paragraphs.length >= MIN_PARAGRAPHS || lineBreaks >= MIN_LINE_BREAKS;
+}
+
+/** 是否包含歧视性/违禁表述 */
+export function hasDiscriminatoryContent(text: string): boolean {
+  const lowerText = text.toLowerCase();
+  return PROHIBITED_TERMS.some((term) =>
+    lowerText.includes(term.toLowerCase()),
+  );
+}

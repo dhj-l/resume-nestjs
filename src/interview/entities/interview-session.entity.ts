@@ -3,7 +3,9 @@ import { Document, SchemaTypes, Types } from 'mongoose';
 import { LevelConfig, LevelConfigSchema } from './level-config.entity';
 import {
   InterviewEndedReasonEnum,
+  InterviewPhaseEnum,
   InterviewStatusEnum,
+  QuestionTypeEnum,
 } from '../constants/level.constants';
 import type { InterviewOutlineTopic } from '../schemas/interview-outline.schema';
 
@@ -33,6 +35,33 @@ export enum MessageChannelEnum {
   Voice = 'voice',
 }
 
+/**
+ * 逐题即时反馈子文档（挂在候选人消息上）
+ *
+ * AI 在每轮回合决策中对候选人刚刚的回答给出的三维度评分与点评。
+ */
+@Schema({ _id: false })
+export class AnswerFeedback {
+  /** 完整性：是否覆盖问题要点、有无遗漏关键信息 */
+  @Prop({ type: Number, required: true, min: 0, max: 100 })
+  completeness: number;
+
+  /** 逻辑性：条理、因果、结构化表达 */
+  @Prop({ type: Number, required: true, min: 0, max: 100 })
+  logic: number;
+
+  /** 技术深度：原理理解、细节把握、量化与实战 */
+  @Prop({ type: Number, required: true, min: 0, max: 100 })
+  depth: number;
+
+  /** 一句话点评：最值得肯定的一点与最需要改进的一点 */
+  @Prop({ required: true })
+  comment: string;
+}
+
+export const AnswerFeedbackSchema =
+  SchemaFactory.createForClass(AnswerFeedback);
+
 /** 单条对话消息子文档 */
 @Schema({ _id: false })
 export class InterviewMessage {
@@ -61,6 +90,15 @@ export class InterviewMessage {
   kind: MessageKindEnum;
 
   /**
+   * 题目类型（取代旧版 isFollowUp 单独追踪的扩展位）
+   *
+   * 面试官消息 = 该题的考察类型；反问环节候选人提问 = reverse。
+   * 旧会话消息缺失该字段，读取时默认按 project（项目主线）处理。
+   */
+  @Prop({ type: String, enum: QuestionTypeEnum })
+  questionType?: QuestionTypeEnum;
+
+  /**
    * 来源渠道（v1 固定 text，为语音扩展预留）
    */
   @Prop({
@@ -75,6 +113,12 @@ export class InterviewMessage {
    */
   @Prop()
   askedAt?: Date;
+
+  /**
+   * 逐题即时反馈（仅候选人消息，主体考察阶段每题答题后生成）
+   */
+  @Prop({ type: AnswerFeedbackSchema })
+  feedback?: AnswerFeedback;
 }
 
 export const InterviewMessageSchema =
@@ -137,16 +181,32 @@ export class InterviewSession {
   outline?: InterviewOutlineTopic[];
 
   /**
-   * 当前轮次（从 1 开始）
+   * 当前轮次（从 1 开始，整场面试递增，含反问环节）
    */
   @Prop({ default: 1 })
   currentRound: number;
 
   /**
-   * 目标轮次（由级别维度决定）
+   * 会话阶段：main(主体考察) / reverse(反问环节)
+   *
+   * 结束不再按题目数判定，而由面试时长驱动：
+   * 主体阶段满 30 分钟且超过题数软上限后 AI 可建议收尾，满 60 分钟强制收尾，
+   * 收尾时进入反问环节。
    */
-  @Prop({ required: true })
-  targetRounds: number;
+  @Prop({
+    type: String,
+    default: InterviewPhaseEnum.Main,
+    enum: InterviewPhaseEnum,
+  })
+  phase: InterviewPhaseEnum;
+
+  /**
+   * 目标轮次（旧版字段：旧流程按题目数结束，已被时长驱动机制取代）
+   *
+   * 仅为读取历史会话保留，新会话不再写入
+   */
+  @Prop()
+  targetRounds?: number;
 
   /**
    * 对话记录

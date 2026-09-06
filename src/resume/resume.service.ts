@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
-  OnModuleInit,
   OnModuleDestroy,
   Logger,
   Optional,
@@ -22,8 +21,7 @@ import { ResumeEditRecord } from '../resume-ai/entities/resume-edit-record.entit
 import { ResumeAnalysisRecord } from '../resume-ai/entities/resume-analysis-record.entity';
 import { Model, Types } from 'mongoose';
 import puppeteer from 'puppeteer';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync } from 'fs';
 import { GetResumeDto } from './dto/get-resume.dto';
 import { AdminQueryResumeDto } from './dto/admin-query-resume.dto';
 
@@ -33,9 +31,8 @@ type SortableItem = {
 };
 
 @Injectable()
-export class ResumeService implements OnModuleInit, OnModuleDestroy {
+export class ResumeService implements OnModuleDestroy {
   private readonly logger = new Logger(ResumeService.name);
-  private tailwindScript: string;
 
   /** 复用的浏览器实例（应用级单例），避免每次生成 PDF 都创建新进程 */
   private browser: any = null;
@@ -52,25 +49,6 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
     private analysisRecordModel: Model<ResumeAnalysisRecord>,
     @Optional() private readonly configService?: ConfigService,
   ) {}
-
-  onModuleInit() {
-    try {
-      // 在开发环境和生产环境中，__dirname 分别指向 src/resume 和 dist/src/resume
-      // 我们需要向上一级找到 dist 目录，然后访问 assets 文件夹
-      const tailwindPath = join(
-        __dirname,
-        '..',
-        '..',
-        'assets',
-        'tailwind.browser.js',
-      );
-      this.tailwindScript = readFileSync(tailwindPath, 'utf-8');
-      this.logger.log('Tailwind CSS 脚本加载成功');
-    } catch (error) {
-      this.logger.error('加载 Tailwind CSS 脚本失败', (error as Error).stack);
-      throw new Error('初始化失败：无法加载 Tailwind CSS 脚本');
-    }
-  }
 
   /**
    * 解析 Puppeteer 使用的 Chrome/Chromium 可执行文件路径。
@@ -240,12 +218,16 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
   }
 
   private getContent(html: string, css: string) {
+    // 前端传来的 css 已自包含全部所需样式（构建时编译的 Tailwind 产物）。
+    // 禁止在此注入 @tailwindcss/browser 等运行时：v4 运行时会注册
+    // @property --tw-gradient-from/to { syntax: "<color>" }，前端 Tailwind 3
+    // 的渐变变量声明（颜色 + 位置两个 token）无法通过校验，会被静默回退成
+    // 透明色，导致导出 PDF 的渐变背景全部消失。
     return `
         <!DOCTYPE html>
         <html>
           <head>
             <meta charset="UTF-8">
-            <script>${this.tailwindScript}</script>
             <style>
               html, body {
                 margin: 0;

@@ -27,6 +27,24 @@ export const InterviewReportSchema = z
         }),
       )
       .min(1),
+    /**
+     * 三维度总评分（完整性/逻辑性/技术深度），
+     * 与逐题即时反馈同口径；旧报告缺失该字段
+     */
+    dimensionScores: z
+      .object({
+        completeness: z.number().min(0).max(100),
+        logic: z.number().min(0).max(100),
+        depth: z.number().min(0).max(100),
+      })
+      .optional(),
+    /** 反问环节表现评价（未进入反问环节时缺失） */
+    reverseFeedback: z
+      .object({
+        score: z.number().min(0).max(100),
+        comment: z.string().max(REPORT_TOPIC_COMMENT_MAX),
+      })
+      .optional(),
     strengths: z
       .array(z.string().max(REPORT_ITEM_MAX))
       .max(REPORT_LIST_MAX)

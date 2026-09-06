@@ -44,4 +44,21 @@ describe('validateJobDescriptionText - 模拟面试 JD 校验', () => {
     expect(result.isValid).toBe(false);
     expect(result.reason).toContain('格式异常');
   });
+
+  it('should reject a JD containing discriminatory terms', () => {
+    // 结构与关键词完整、长度达标，但含歧视性表述，应与 resume-ai 校验口径一致被拒绝
+    const discriminatoryJd = `前端开发工程师（Node.js 方向）
+工作地点：上海
+公司介绍：某互联网公司，专注于 AI 与数据平台产品研发，团队规模约两百人，技术氛围浓厚，办公环境舒适，为员工提供完善的培训体系与职业发展通道。
+职位描述：
+1、负责服务端接口与 BFF 层研发；
+2、参与性能优化和架构升级。
+任职要求：
+1、本科及以上学历，仅限男性；
+2、熟悉 Node.js 与数据库设计。
+薪资范围：25k-40k。`;
+    const result = validateJobDescriptionText(discriminatoryJd);
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toContain('歧视');
+  });
 });

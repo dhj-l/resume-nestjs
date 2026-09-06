@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { Observable, of } from 'rxjs';
 import { InterviewController } from './interview.controller';
 import { InterviewService } from './interview.service';
 
@@ -17,6 +18,7 @@ describe('InterviewController', () => {
     cancelSession: jest.fn(),
     getReport: jest.fn(),
     getQuestionAudio: jest.fn(),
+    getQuestionAudioStreamEvents: jest.fn(),
   } as any;
 
   const req = { user: { userId: 'user-1' } };
@@ -76,18 +78,69 @@ describe('InterviewController', () => {
     });
   });
 
-  it('submitAnswerSse should throw business errors before headers are set', () => {
-    mockService.submitAnswerSse.mockImplementation(() => {
-      throw new BadRequestException('会话 ID 格式不正确');
-    });
-    expect(() =>
+  it('submitAnswerSse should throw business errors before headers are set', async () => {
+    // 校验前置到 service 的 await 阶段：此处抛出时尚未设置 SSE 头
+    mockService.submitAnswerSse.mockRejectedValue(
+      new BadRequestException('会话 ID 格式不正确'),
+    );
+    const res = { setHeader: jest.fn(), write: jest.fn(), end: jest.fn() };
+    await expect(
       controller.submitAnswerSse(
         'bad-id',
         { content: '回答' },
         req as any,
-        {} as any,
+        res as any,
       ),
-    ).toThrow(BadRequestException);
+    ).rejects.toThrow(BadRequestException);
+    expect(res.setHeader).not.toHaveBeenCalled();
+    expect(res.write).not.toHaveBeenCalled();
+  });
+
+  it('submitAnswerSse should stream events as SSE frames after validation', async () => {
+    mockService.submitAnswerSse.mockResolvedValue(
+      of({ type: 'init', message: '开始处理回答' }),
+    );
+    const res = { setHeader: jest.fn(), write: jest.fn(), end: jest.fn() };
+    const reqObj = { user: { userId: 'user-1' }, on: jest.fn() };
+
+    await controller.submitAnswerSse(
+      '507f1f77bcf86cd799439011',
+      { content: '回答' },
+      reqObj as any,
+      res as any,
+    );
+
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'text/event-stream',
+    );
+    expect(res.write).toHaveBeenCalledWith(
+      'data: {"type":"init","message":"开始处理回答"}\n\n',
+    );
+    expect(res.end).toHaveBeenCalled();
+  });
+
+  it('submitAnswerSse should not leak internal error details in the error frame', async () => {
+    mockService.submitAnswerSse.mockResolvedValue(
+      new Observable((subscriber) => {
+        subscriber.error(new Error('mongo uri and credentials leaked'));
+      }),
+    );
+    const res = { setHeader: jest.fn(), write: jest.fn(), end: jest.fn() };
+    const reqObj = { user: { userId: 'user-1' }, on: jest.fn() };
+
+    await controller.submitAnswerSse(
+      '507f1f77bcf86cd799439011',
+      { content: '回答' },
+      reqObj as any,
+      res as any,
+    );
+
+    // 非 HttpException 只给通用文案；业务异常消息原样保留
+    expect(res.write).toHaveBeenCalledWith(
+      'data: {"type":"error","message":"服务器内部错误"}\n\n',
+    );
+    expect(JSON.stringify(res.write.mock.calls)).not.toContain('mongo uri');
   });
 
   describe('getQuestionTts', () => {
@@ -127,6 +180,101 @@ describe('InterviewController', () => {
           res as any,
         ),
       ).rejects.toThrow('服务器内部错误');
+    });
+  });
+
+  describe('getQuestionTtsStream', () => {
+    const res = {
+      setHeader: jest.fn(),
+      write: jest.fn(),
+      end: jest.fn(),
+    };
+    const req = {
+      user: { userId: 'user-1' },
+      on: jest.fn(),
+    };
+
+    it('should stream events as SSE frames with streaming headers', async () => {
+      mockService.getQuestionAudioStreamEvents.mockResolvedValue(
+        of(
+          { type: 'meta', sampleRate: 24000, channels: 1 },
+          { type: 'chunk', data: 'aGk=' },
+          { type: 'done' },
+        ),
+      );
+
+      await controller.getQuestionTtsStream(
+        '507f1f77bcf86cd799439011',
+        { round: 1 },
+        req as any,
+        res as any,
+      );
+
+      expect(mockService.getQuestionAudioStreamEvents).toHaveBeenCalledWith(
+        '507f1f77bcf86cd799439011',
+        'user-1',
+        1,
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'Content-Type',
+        'text/event-stream',
+      );
+      expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-cache');
+      expect(res.setHeader).toHaveBeenCalledWith('X-Accel-Buffering', 'no');
+      expect(res.write).toHaveBeenNthCalledWith(
+        1,
+        'data: {"type":"meta","sampleRate":24000,"channels":1}\n\n',
+      );
+      expect(res.write).toHaveBeenNthCalledWith(
+        2,
+        'data: {"type":"chunk","data":"aGk="}\n\n',
+      );
+      expect(res.write).toHaveBeenNthCalledWith(3, 'data: {"type":"done"}\n\n');
+      expect(res.end).toHaveBeenCalled();
+    });
+
+    it('should throw business errors before headers are set', async () => {
+      mockService.getQuestionAudioStreamEvents.mockRejectedValue(
+        new BadRequestException('该轮次的问题不存在'),
+      );
+
+      await expect(
+        controller.getQuestionTtsStream(
+          '507f1f77bcf86cd799439011',
+          { round: 9 },
+          req as any,
+          res as any,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(res.setHeader).not.toHaveBeenCalled();
+    });
+
+    it('should register the disconnect listener before awaiting the stream', async () => {
+      const handlers: Record<string, () => void> = {};
+      const disconnectableReq = {
+        user: { userId: 'user-1' },
+        on: jest.fn((event: string, cb: () => void) => {
+          handlers[event] = cb;
+        }),
+      };
+
+      // 客户端在 service 校验/建连期间断开
+      mockService.getQuestionAudioStreamEvents.mockImplementation(async () => {
+        handlers.close?.();
+        return of({ type: 'meta', sampleRate: 24000, channels: 1 });
+      });
+
+      await controller.getQuestionTtsStream(
+        '507f1f77bcf86cd799439011',
+        { round: 1 },
+        disconnectableReq as any,
+        res as any,
+      );
+
+      // 断开后不应设置 SSE 头、不应订阅事件流（避免无人收听的合成费用）
+      expect(res.setHeader).not.toHaveBeenCalled();
+      expect(res.write).not.toHaveBeenCalled();
+      expect(res.end).not.toHaveBeenCalled();
     });
   });
 });

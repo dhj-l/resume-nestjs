@@ -7,7 +7,8 @@ import {
 } from './create-interview-session.dto';
 import {
   ExperienceLevelEnum,
-  InterviewFocusEnum,
+  InterviewModeEnum,
+  InterviewStageEnum,
 } from '../constants/level.constants';
 import { MessageChannelEnum } from '../entities/interview-session.entity';
 
@@ -27,8 +28,9 @@ function buildValidDto(): Record<string, any> {
     resumeId: '507f1f77bcf86cd799439011',
     jobDescription: validJd,
     levelConfig: {
+      mode: InterviewModeEnum.Experienced,
+      stage: InterviewStageEnum.First,
       experienceLevel: ExperienceLevelEnum.Mid,
-      focus: InterviewFocusEnum.Technical,
     },
   };
 }
@@ -41,20 +43,47 @@ describe('CreateInterviewSessionDto', () => {
     expect(dto.levelConfig).toBeInstanceOf(LevelConfigDto);
   });
 
+  it('should accept campus mode without experienceLevel', async () => {
+    const payload = buildValidDto();
+    payload.levelConfig = {
+      mode: InterviewModeEnum.Campus,
+      stage: InterviewStageEnum.Second,
+    };
+    const dto = plainToInstance(CreateInterviewSessionDto, payload);
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('should reject experienced mode without experienceLevel', async () => {
+    const payload = buildValidDto();
+    delete payload.levelConfig.experienceLevel;
+    const dto = plainToInstance(CreateInterviewSessionDto, payload);
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'levelConfig')).toBe(true);
+  });
+
+  it('should reject an invalid mode enum value', async () => {
+    const payload = buildValidDto();
+    payload.levelConfig.mode = 'internship';
+    const dto = plainToInstance(CreateInterviewSessionDto, payload);
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'levelConfig')).toBe(true);
+  });
+
+  it('should reject an invalid stage enum value', async () => {
+    const payload = buildValidDto();
+    payload.levelConfig.stage = 'hr_round';
+    const dto = plainToInstance(CreateInterviewSessionDto, payload);
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'levelConfig')).toBe(true);
+  });
+
   it('should reject an invalid experienceLevel enum value', async () => {
     const payload = buildValidDto();
     payload.levelConfig.experienceLevel = 'principal';
     const dto = plainToInstance(CreateInterviewSessionDto, payload);
     const errors = await validate(dto);
     expect(errors.some((e) => e.property === 'levelConfig')).toBe(true);
-  });
-
-  it('should reject an invalid focus enum value', async () => {
-    const payload = buildValidDto();
-    payload.levelConfig.focus = 'salary_negotiation';
-    const dto = plainToInstance(CreateInterviewSessionDto, payload);
-    const errors = await validate(dto);
-    expect(errors.length).toBeGreaterThan(0);
   });
 
   it('should reject a non-mongo resumeId', async () => {

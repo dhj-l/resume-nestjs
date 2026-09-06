@@ -22,7 +22,11 @@ import {
 } from './dto/create-interview-session.dto';
 import { ListInterviewSessionsDto } from './dto/list-interview-sessions.dto';
 import { InterviewTtsQueryDto } from './dto/interview-tts.dto';
-import { InterviewService, SseEvent } from './interview.service';
+import {
+  InterviewService,
+  SseEvent,
+  TtsStreamEvent,
+} from './interview.service';
 
 @Controller('interview')
 @UseGuards(JwtAuthGuard)
@@ -93,7 +97,8 @@ export class InterviewController {
   }
 
   /**
-   * 提交回答：返回下一题；最后一轮自动结束并生成报告
+   * 提交回答：主体考察阶段返回逐题反馈与下一题；
+   * 面试收尾时自动转入反问环节，反问结束后自动生成报告
    */
   @Post('sessions/:id/answers')
   async submitAnswer(
@@ -109,21 +114,46 @@ export class InterviewController {
   }
 
   /**
-   * 提交回答（SSE 流式变体）：实时推送下一题生成结果
+   * 获取反问环节的推荐话术（按面试轮次与面试官角色生成，可直接使用）
+   */
+  @Get('sessions/:id/reverse-suggestions')
+  async getReverseSuggestions(
+    @Param('id') id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.interviewService.getReverseSuggestions(
+        id,
+        req.user.userId,
+      );
+    } catch (error) {
+      throw this.wrapError(error);
+    }
+  }
+
+  /**
+   * 提交回答（SSE 流式变体）：依次推送 init → feedback（逐题反馈）→
+   * question / finished 事件。
    * 为后续语音通话场景的 TTS 文本流预留。
    */
   @Post('sessions/:id/answers/stream')
-  submitAnswerSse(
+  async submitAnswerSse(
     @Param('id') id: string,
     @Body() dto: SubmitAnswerDto,
     @Req() req: any,
     @Res() res: Response,
-  ): void {
-    // 先获取 Observable：校验失败等同步异常交由全局过滤器按 JSON 错误格式返回
+  ): Promise<void> {
+    // 先 await 事件流：会话不存在/已结束/超时等业务校验在 service 内部
+    // 于返回流之前抛出，此时尚未设置 SSE 头，异常交由全局过滤器按
+    // 标准 JSON 错误格式返回（404/409）
     let events$: Observable<SseEvent>;
     try {
-      events$ = this.interviewService.submitAnswerSse(id, dto, req.user.userId);
-    } catch (error: any) {
+      events$ = await this.interviewService.submitAnswerSse(
+        id,
+        dto,
+        req.user.userId,
+      );
+    } catch (error) {
       throw this.wrapError(error);
     }
 
@@ -140,7 +170,9 @@ export class InterviewController {
         this.logger.error('面试SSE错误', error.stack);
         const errorEvent: SseEvent = {
           type: 'error',
-          message: error.message || '连接错误',
+          // 仅透传业务异常消息，内部错误细节不泄漏给客户端
+          message:
+            error instanceof HttpException ? error.message : '服务器内部错误',
         };
         res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
         res.end();
@@ -226,6 +258,77 @@ export class InterviewController {
     } catch (error) {
       throw this.wrapError(error);
     }
+  }
+
+  /**
+   * 获取指定轮次面试官问题的流式语音（SSE，边合成边推送）
+   *
+   * 事件序列：meta（采样率）→ chunk（base64 PCM16）×N → done；
+   * 失败时在流内发 error 事件。会话/轮次校验错误仍是标准 JSON 包络
+   * （在校验期间断开的客户端不会触发任何上游合成）。
+   * * 与 POST /answers/stream 同一模式：消费端需 fetch + ReadableStream（带
+   * JWT header），不能用 EventSource；生产环境经 nginx 时依赖
+   * X-Accel-Buffering: no 逐帧透传。
+   */
+  @Get('sessions/:id/tts/stream')
+  async getQuestionTtsStream(
+    @Param('id') id: string,
+    @Query() query: InterviewTtsQueryDto,
+    @Req() req: any,
+    @Res() res: Response,
+  ): Promise<void> {
+    // 立即注册断连监听：service 的校验读取与上游建连耗时期间，
+    // 客户端可能已经离开页面
+    let clientGone = false;
+    req.on('close', () => {
+      clientGone = true;
+    });
+    req.on('error', () => {
+      clientGone = true;
+    });
+
+    // 先获取事件流：业务校验失败等会异步同步抛错，此时尚未设置 SSE 头，
+    // 异常交由全局过滤器按标准 JSON 错误格式返回
+    let events$: Observable<TtsStreamEvent>;
+    try {
+      events$ = await this.interviewService.getQuestionAudioStreamEvents(
+        id,
+        req.user.userId,
+        query.round,
+      );
+    } catch (error) {
+      throw this.wrapError(error);
+    }
+    if (clientGone) {
+      // 等待期间客户端已断开：不再订阅（上游建连也尚未发生，零合成成本）
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const subscription = events$.subscribe({
+      next: (event: TtsStreamEvent) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      },
+      // 业务异常已作为 error 事件写入，这里仅是兜底
+      error: (error: Error) => {
+        this.logger.error('TTS 流式事件错误', error.stack);
+        res.end();
+      },
+      complete: () => res.end(),
+    });
+
+    req.on('close', () => {
+      subscription.unsubscribe();
+      res.end();
+    });
+    req.on('error', () => {
+      subscription.unsubscribe();
+      res.end();
+    });
   }
 
   private wrapError(error: unknown): Error {
