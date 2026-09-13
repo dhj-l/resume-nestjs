@@ -1,5 +1,6 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsDefined,
   IsEnum,
   IsMongoId,
   IsNotEmpty,
@@ -75,7 +76,11 @@ export class CreateInterviewSessionDto {
 
   /**
    * 面试级别配置
+   *
+   * @IsDefined 不可省略：class-validator 的 ValidateNested 对 undefined 直接
+   * 跳过校验，缺少该字段会穿透到 service 变成 500
    */
+  @IsDefined({ message: 'levelConfig 为必填项' })
   @ValidateNested()
   @Type(() => LevelConfigDto)
   levelConfig: LevelConfigDto;
@@ -87,7 +92,11 @@ export class CreateInterviewSessionDto {
 export class SubmitAnswerDto {
   /**
    * 回答内容（主体考察阶段为回答；反问环节为候选人提出的问题）
+   *
+   * 先 trim 再校验：纯空白串与空串同待遇，否则会以空串落库
+   * （$push 更新路径不跑 schema 的 required 校验），模型也会拿到空回答
    */
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @IsNotEmpty({ message: '回答内容不能为空' })
   @MaxLength(5000, { message: '回答内容最长 5000 字' })

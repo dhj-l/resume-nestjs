@@ -70,11 +70,14 @@ export function resolveStageConfig(
  * 归一化创建会话 DTO 的级别配置：
  * - 校招模式：经验层级强制归一为 junior（忽略传入值）
  * - 社招模式：必须显式选择 mid/senior/expert，拒绝 junior
+ *
+ * 入参允许 undefined：DTO 的 @IsDefined 是第一道防线，这里是任何调用路径
+ * （内部复用、后续新增入口）的兜底，保证缺失时是 400 而不是 500。
  */
 export function normalizeLevelConfig(
-  dto: LevelConfigInput,
+  dto: LevelConfigInput | undefined,
 ): ResolvedLevelConfig {
-  if (!dto.mode || !dto.stage) {
+  if (!dto?.mode || !dto?.stage) {
     throw new BadRequestException('mode 与 stage 为必填项');
   }
   if (dto.mode === InterviewModeEnum.Campus) {

@@ -1,23 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PromptTemplate } from '@langchain/core/prompts';
 import { AiService } from 'src/ai/ai.service';
-import { invokeChainWithRetry } from 'src/ai/chain-invoke.utils';
 import { formatDate } from 'src/common/utils/date';
-import {
-  EXPERIENCE_LEVEL_PROMPTS,
-  INTERVIEW_MODE_PROMPTS,
-  INTERVIEW_STAGE_PROMPTS,
-} from '../constants/level.constants';
 import type { InterviewMessage } from '../entities/interview-session.entity';
-import { MessageRoleEnum } from '../entities/interview-session.entity';
 import { interviewReportPrompt } from '../prompt/report.prompt';
 import type { InterviewOutlineTopic } from '../schemas/interview-outline.schema';
 import type { InterviewReport } from '../schemas/interview-report.schema';
 import { InterviewReportSchema } from '../schemas/interview-report.schema';
+import { invokeStructuredChain } from '../utils/structured-chain.utils';
+import { buildPersonaVariables } from '../utils/prompt-vars.utils';
+import { formatTranscript } from '../utils/transcript.utils';
 import type { ResolvedLevelConfig } from '../utils/stage-compat';
-
-/** 输入预算（字符）：对话记录可能较长，单独放宽 */
-const REPORT_INPUT_BUDGET = 16000;
 
 /**
  * 报告生成单次尝试超时（毫秒）
@@ -57,56 +49,36 @@ export class EvaluationService {
    * 生成面试评价报告
    */
   async generateReport(params: GenerateReportParams): Promise<InterviewReport> {
-    const jobDescription =
-      params.jobDescription.length > REPORT_INPUT_BUDGET
-        ? params.jobDescription.slice(0, REPORT_INPUT_BUDGET)
-        : params.jobDescription;
-
-    const chain = PromptTemplate.fromTemplate(interviewReportPrompt)
-      .pipe(this.aiService.generateInterviewReport())
-      .pipe(this.aiService.createRobustStructuredParser(InterviewReportSchema));
-
-    return invokeChainWithRetry<InterviewReport>(
-      chain,
-      {
-        jd: jobDescription,
-        mode_desc: INTERVIEW_MODE_PROMPTS[params.levelConfig.mode],
-        stage_desc: INTERVIEW_STAGE_PROMPTS[params.levelConfig.stage],
-        experience_level_desc:
-          EXPERIENCE_LEVEL_PROMPTS[params.levelConfig.experienceLevel],
+    return invokeStructuredChain<InterviewReport>(this.aiService, {
+      promptTemplate: interviewReportPrompt,
+      llm: this.aiService.generateInterviewReport(),
+      schema: InterviewReportSchema,
+      variables: {
+        // JD 已由 DTO 与 validateJobDescriptionText 限制在 5000 字符内，无需再截断；
+        // 报告的长输入来自对话转录，预算在 formatTranscript 内控制
+        jd: params.jobDescription,
+        ...buildPersonaVariables(params.levelConfig),
         outline_json: JSON.stringify(params.outline),
         transcript: formatTranscript(params.messages) || '（候选人未作答）',
         duration_minutes: String(params.durationMinutes),
         question_count: String(params.questionCount),
         current_date: formatDate(),
       },
-      {
-        timeoutMs: REPORT_TIMEOUT_MS,
-        retries: REPORT_RETRIES,
-        label: '报告生成',
-        validate: (result) => {
-          const report = result as InterviewReport;
-          if (
-            !report ||
-            typeof report.overallScore !== 'number' ||
-            !Array.isArray(report.topics) ||
-            report.topics.length === 0
-          ) {
-            throw new Error('AI 返回的报告结构不完整');
-          }
-        },
+      // 报告生成耗时显著高于出题链，超时与重试单独放宽
+      timeoutMs: REPORT_TIMEOUT_MS,
+      retries: REPORT_RETRIES,
+      label: '报告生成',
+      validate: (result) => {
+        const report = result as InterviewReport;
+        if (
+          !report ||
+          typeof report.overallScore !== 'number' ||
+          !Array.isArray(report.topics) ||
+          report.topics.length === 0
+        ) {
+          throw new Error('AI 返回的报告结构不完整');
+        }
       },
-    );
+    });
   }
-}
-
-function formatTranscript(messages: InterviewMessage[]): string {
-  return messages
-    .map(
-      (message) =>
-        `${
-          message.role === MessageRoleEnum.Interviewer ? '面试官' : '候选人'
-        }（第 ${message.round} 轮）：${message.content}`,
-    )
-    .join('\n\n');
 }

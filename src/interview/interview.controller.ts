@@ -16,17 +16,14 @@ import { Throttle } from '@nestjs/throttler';
 import { type Response } from 'express';
 import { Observable } from 'rxjs';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { initSseResponse, writeSseEvent } from 'src/common/sse.utils';
 import {
   CreateInterviewSessionDto,
   SubmitAnswerDto,
 } from './dto/create-interview-session.dto';
 import { ListInterviewSessionsDto } from './dto/list-interview-sessions.dto';
 import { InterviewTtsQueryDto } from './dto/interview-tts.dto';
-import {
-  InterviewService,
-  SseEvent,
-  TtsStreamEvent,
-} from './interview.service';
+import { InterviewService, SseEvent } from './interview.service';
 
 @Controller('interview')
 @UseGuards(JwtAuthGuard)
@@ -44,11 +41,9 @@ export class InterviewController {
     @Body() dto: CreateInterviewSessionDto,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.createSession(dto, req.user.userId);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    return this.run(() =>
+      this.interviewService.createSession(dto, req.user.userId),
+    );
   }
 
   /**
@@ -59,11 +54,9 @@ export class InterviewController {
     @Query() query: ListInterviewSessionsDto,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.listSessions(req.user.userId, query);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    return this.run(() =>
+      this.interviewService.listSessions(req.user.userId, query),
+    );
   }
 
   /**
@@ -71,14 +64,10 @@ export class InterviewController {
    */
   @Get('sessions/current')
   async getCurrentSession(@Req() req: { user: { userId: string } }) {
-    try {
-      const session = await this.interviewService.getCurrentSession(
-        req.user.userId,
-      );
-      return { active: !!session && session.status === 'in_progress', session };
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    const session = await this.run(() =>
+      this.interviewService.getCurrentSession(req.user.userId),
+    );
+    return { active: !!session && session.status === 'in_progress', session };
   }
 
   /**
@@ -89,11 +78,9 @@ export class InterviewController {
     @Param('id') id: string,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.getSessionDetail(id, req.user.userId);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    return this.run(() =>
+      this.interviewService.getSessionDetail(id, req.user.userId),
+    );
   }
 
   /**
@@ -106,11 +93,9 @@ export class InterviewController {
     @Body() dto: SubmitAnswerDto,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.submitAnswer(id, dto, req.user.userId);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    return this.run(() =>
+      this.interviewService.submitAnswer(id, dto, req.user.userId),
+    );
   }
 
   /**
@@ -121,14 +106,11 @@ export class InterviewController {
     @Param('id') id: string,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.getReverseSuggestions(
-        id,
-        req.user.userId,
-      );
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    const suggestions = await this.run(() =>
+      this.interviewService.getReverseSuggestions(id, req.user.userId),
+    );
+    // 与 docs/api/mock-interview.md 的响应契约一致：data.suggestions
+    return { suggestions };
   }
 
   /**
@@ -146,47 +128,21 @@ export class InterviewController {
     // 先 await 事件流：会话不存在/已结束/超时等业务校验在 service 内部
     // 于返回流之前抛出，此时尚未设置 SSE 头，异常交由全局过滤器按
     // 标准 JSON 错误格式返回（404/409）
-    let events$: Observable<SseEvent>;
-    try {
-      events$ = await this.interviewService.submitAnswerSse(
-        id,
-        dto,
-        req.user.userId,
-      );
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    const events$ = await this.run(() =>
+      this.interviewService.submitAnswerSse(id, dto, req.user.userId),
+    );
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
+    initSseResponse(res);
 
-    const subscription = events$.subscribe({
-      next: (event: SseEvent) => {
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
-      },
-      error: (error: Error) => {
-        this.logger.error('面试SSE错误', error.stack);
-        const errorEvent: SseEvent = {
-          type: 'error',
-          // 仅透传业务异常消息，内部错误细节不泄漏给客户端
-          message:
-            error instanceof HttpException ? error.message : '服务器内部错误',
-        };
-        res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
-        res.end();
-      },
-      complete: () => res.end(),
-    });
-
-    req.on('close', () => {
-      subscription.unsubscribe();
-      res.end();
-    });
-    req.on('error', () => {
-      subscription.unsubscribe();
-      res.end();
+    this.pipeSse(req, res, events$, (error) => {
+      this.logger.error('面试SSE错误', error.stack);
+      const errorEvent: SseEvent = {
+        type: 'error',
+        // 仅透传业务异常消息，内部错误细节不泄漏给客户端
+        message:
+          error instanceof HttpException ? error.message : '服务器内部错误',
+      };
+      writeSseEvent(res, errorEvent);
     });
   }
 
@@ -198,11 +154,9 @@ export class InterviewController {
     @Param('id') id: string,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.finishSession(id, req.user.userId);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    return this.run(() =>
+      this.interviewService.finishSession(id, req.user.userId),
+    );
   }
 
   /**
@@ -213,11 +167,9 @@ export class InterviewController {
     @Param('id') id: string,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.cancelSession(id, req.user.userId);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    return this.run(() =>
+      this.interviewService.cancelSession(id, req.user.userId),
+    );
   }
 
   /**
@@ -228,11 +180,7 @@ export class InterviewController {
     @Param('id') id: string,
     @Req() req: { user: { userId: string } },
   ) {
-    try {
-      return await this.interviewService.getReport(id, req.user.userId);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    return this.run(() => this.interviewService.getReport(id, req.user.userId));
   }
 
   /**
@@ -246,7 +194,7 @@ export class InterviewController {
     @Req() req: { user: { userId: string } },
     @Res() res: Response,
   ): Promise<void> {
-    try {
+    await this.run(async () => {
       const audio = await this.interviewService.getQuestionAudio(
         id,
         req.user.userId,
@@ -255,9 +203,7 @@ export class InterviewController {
       res.setHeader('Content-Type', audio.mimeType);
       res.setHeader('Cache-Control', 'private, max-age=86400');
       res.send(audio.buffer);
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+    });
   }
 
   /**
@@ -289,33 +235,45 @@ export class InterviewController {
 
     // 先获取事件流：业务校验失败等会异步同步抛错，此时尚未设置 SSE 头，
     // 异常交由全局过滤器按标准 JSON 错误格式返回
-    let events$: Observable<TtsStreamEvent>;
-    try {
-      events$ = await this.interviewService.getQuestionAudioStreamEvents(
+    const events$ = await this.run(() =>
+      this.interviewService.getQuestionAudioStreamEvents(
         id,
         req.user.userId,
         query.round,
-      );
-    } catch (error) {
-      throw this.wrapError(error);
-    }
+      ),
+    );
     if (clientGone) {
       // 等待期间客户端已断开：不再订阅（上游建连也尚未发生，零合成成本）
       return;
     }
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
+    initSseResponse(res);
 
+    // 业务异常已作为 error 事件写入，这里仅是兜底
+    this.pipeSse(req, res, events$, (error) => {
+      this.logger.error('TTS 流式事件错误', error.stack);
+    });
+  }
+
+  /**
+   * 订阅事件流并以 SSE 帧写出（两个流式端点共用）
+   *
+   * complete/error 时结束响应；客户端断开（close/error）时立即取消订阅，
+   * 事件流内部据此中止上游请求（TTS 合成不再产生费用）。
+   * 调用方负责在调用前完成业务校验并设置 SSE 头。
+   */
+  private pipeSse<T>(
+    req: any,
+    res: Response,
+    events$: Observable<T>,
+    onError: (error: Error) => void,
+  ): void {
     const subscription = events$.subscribe({
-      next: (event: TtsStreamEvent) => {
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      next: (event: T) => {
+        writeSseEvent(res, event);
       },
-      // 业务异常已作为 error 事件写入，这里仅是兜底
       error: (error: Error) => {
-        this.logger.error('TTS 流式事件错误', error.stack);
+        onError(error);
         res.end();
       },
       complete: () => res.end(),
@@ -329,6 +287,18 @@ export class InterviewController {
       subscription.unsubscribe();
       res.end();
     });
+  }
+
+  /**
+   * 统一的错误包装入口（全部路由共用）：业务异常原样透传，
+   * 未知异常记日志后收敛为 500 通用文案
+   */
+  private async run<T>(task: () => Promise<T>): Promise<T> {
+    try {
+      return await task();
+    } catch (error) {
+      throw this.wrapError(error);
+    }
   }
 
   private wrapError(error: unknown): Error {

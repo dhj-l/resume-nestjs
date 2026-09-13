@@ -19,15 +19,21 @@ class PromptCacheMetricsHandler extends BaseCallbackHandler {
 
   handleLLMEnd(output: LLMResult): void {
     try {
-      const message = output.generations?.[0]?.[0]?.message as
-        | {
-            additional_kwargs?: { usage?: Record<string, unknown> };
-            usage_metadata?: {
-              input_tokens?: number;
-              input_token_details?: { cache_read?: number };
-            };
-          }
-        | undefined;
+      // Generation 基类未声明 message（聊天模型实际返回 ChatGeneration），
+      // 这里只消费 usage 相关字段，按形状断言即可
+      const message = (
+        output.generations?.[0]?.[0] as
+          | {
+              message?: {
+                additional_kwargs?: { usage?: Record<string, unknown> };
+                usage_metadata?: {
+                  input_tokens?: number;
+                  input_token_details?: { cache_read?: number };
+                };
+              };
+            }
+          | undefined
+      )?.message;
       const nativeUsage = message?.additional_kwargs?.usage as
         | {
             prompt_tokens?: number;

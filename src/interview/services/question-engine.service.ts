@@ -1,26 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PromptTemplate } from '@langchain/core/prompts';
-import type { Runnable } from '@langchain/core/runnables';
-import type { ZodSchema } from 'zod';
 import { AiService } from 'src/ai/ai.service';
-import {
-  AI_INVOKE_RETRIES,
-  invokeChainWithRetry,
-} from 'src/ai/chain-invoke.utils';
 import { formatDate } from 'src/common/utils/date';
 import {
-  ANALYSIS_TIMEOUT_MS,
+  ANALYSIS_INPUT_BUDGET,
   buildTruncatedAnalysisContext,
 } from 'src/resume-ai/analysis.utils';
 import {
-  EXPERIENCE_LEVEL_PROMPTS,
-  INTERVIEW_MODE_PROMPTS,
-  INTERVIEW_STAGE_PROMPTS,
   MAX_REVERSE_QUESTIONS,
+  MIN_MAIN_DURATION_MS,
   QuestionTypeEnum,
+  SOFT_MAX_MAIN_QUESTIONS,
 } from '../constants/level.constants';
 import type { InterviewMessage } from '../entities/interview-session.entity';
-import { MessageRoleEnum } from '../entities/interview-session.entity';
 import { interviewOutlinePrompt } from '../prompt/outline.prompt';
 import { interviewQuestionPrompt } from '../prompt/question.prompt';
 import { interviewReversePrompt } from '../prompt/reverse.prompt';
@@ -39,12 +30,10 @@ import {
   InterviewReverseSuggestionsSchema,
   REVERSE_SUGGESTIONS_MAX,
 } from '../schemas/interview-reverse-suggestions.schema';
+import { invokeStructuredChain } from '../utils/structured-chain.utils';
+import { buildPersonaVariables } from '../utils/prompt-vars.utils';
+import { formatConversationHistory } from '../utils/transcript.utils';
 import type { EndPolicy, ResolvedLevelConfig } from '../utils/stage-compat';
-
-/** 送入提示词的最近对话条数上限 */
-const HISTORY_MESSAGE_LIMIT = 10;
-/** 输入预算（字符） */
-const INPUT_BUDGET = 8000;
 
 export interface GenerateOutlineParams {
   jobDescription: string;
@@ -88,16 +77,6 @@ export interface GenerateReverseSuggestionsParams {
   messages: InterviewMessage[];
 }
 
-/** 四类出题链共享的调用参数（超时/重试策略单点） */
-interface StructuredInvokeParams {
-  promptTemplate: string;
-  llm: Runnable;
-  schema: ZodSchema;
-  variables: Record<string, string>;
-  label: string;
-  validate: (result: unknown) => void;
-}
-
 /**
  * 面试出题引擎
  *
@@ -120,24 +99,14 @@ export class QuestionEngineService {
   async generateOutline(
     params: GenerateOutlineParams,
   ): Promise<InterviewOutlineTopic[]> {
-    const { resumeContent, jobDescription } = buildTruncatedAnalysisContext(
-      params.resume,
-      params.jobDescription,
-      INPUT_BUDGET,
-    );
-
-    const result = await this.invokeStructured<{
+    const result = await invokeStructuredChain<{
       topics: InterviewOutlineTopic[];
-    }>({
+    }>(this.aiService, {
       promptTemplate: interviewOutlinePrompt,
       llm: this.aiService.generateInterviewOutline(),
       schema: InterviewOutlineSchema,
       variables: {
-        ...this.baseChainVariables(
-          jobDescription,
-          resumeContent,
-          params.levelConfig,
-        ),
+        ...this.chainVariables(params),
         topic_count: String(OUTLINE_TOPIC_COUNT_MAX),
         current_date: formatDate(),
       },
@@ -158,26 +127,16 @@ export class QuestionEngineService {
   async generateTurn(
     params: GenerateTurnParams,
   ): Promise<InterviewTurnDecision> {
-    const { resumeContent, jobDescription } = buildTruncatedAnalysisContext(
-      params.resume,
-      params.jobDescription,
-      INPUT_BUDGET,
-    );
-
     const remainingTopics = params.outline.filter(
       (topic) => !params.askedTopicKeys.includes(topic.key),
     );
 
-    return this.invokeStructured<InterviewTurnDecision>({
+    return invokeStructuredChain<InterviewTurnDecision>(this.aiService, {
       promptTemplate: interviewQuestionPrompt,
       llm: this.aiService.generateInterviewQuestion(),
       schema: InterviewTurnDecisionSchema,
       variables: {
-        ...this.baseChainVariables(
-          jobDescription,
-          resumeContent,
-          params.levelConfig,
-        ),
+        ...this.chainVariables(params),
         elapsed_minutes: String(params.elapsedMinutes),
         asked_count: String(params.askedCount),
         end_policy_desc: formatEndPolicyDesc(
@@ -224,22 +183,12 @@ export class QuestionEngineService {
   async generateReverseResponse(
     params: GenerateReverseResponseParams,
   ): Promise<InterviewReverseResponse> {
-    const { resumeContent, jobDescription } = buildTruncatedAnalysisContext(
-      params.resume,
-      params.jobDescription,
-      INPUT_BUDGET,
-    );
-
-    return this.invokeStructured<InterviewReverseResponse>({
+    return invokeStructuredChain<InterviewReverseResponse>(this.aiService, {
       promptTemplate: interviewReversePrompt,
       llm: this.aiService.generateInterviewQuestion(),
       schema: InterviewReverseResponseSchema,
       variables: {
-        ...this.baseChainVariables(
-          jobDescription,
-          resumeContent,
-          params.levelConfig,
-        ),
+        ...this.chainVariables(params),
         reverse_count: String(params.reverseCount),
         max_reverse: String(MAX_REVERSE_QUESTIONS),
         conversation_history:
@@ -260,24 +209,14 @@ export class QuestionEngineService {
   async generateReverseSuggestions(
     params: GenerateReverseSuggestionsParams,
   ): Promise<InterviewReverseSuggestion[]> {
-    const { resumeContent, jobDescription } = buildTruncatedAnalysisContext(
-      params.resume,
-      params.jobDescription,
-      INPUT_BUDGET,
-    );
-
-    const result = await this.invokeStructured<{
+    const result = await invokeStructuredChain<{
       suggestions: InterviewReverseSuggestion[];
-    }>({
+    }>(this.aiService, {
       promptTemplate: interviewReverseSuggestionsPrompt,
       llm: this.aiService.generateInterviewSuggestions(),
       schema: InterviewReverseSuggestionsSchema,
       variables: {
-        ...this.baseChainVariables(
-          jobDescription,
-          resumeContent,
-          params.levelConfig,
-        ),
+        ...this.chainVariables(params),
         suggestion_count: String(REVERSE_SUGGESTIONS_MAX),
         conversation_history:
           formatConversationHistory(params.messages) || '（面试尚未开始）',
@@ -293,38 +232,25 @@ export class QuestionEngineService {
   }
 
   /**
-   * 构造并调用「提示词模板 → 模型 → 结构化解析」的标准链
+   * 四类出题链共享的提示词变量：JD/简历上下文与面试官人设
    *
-   * 四类出题调用（大纲/回合决策/反问回应/反问建议）共用同一套
-   * 链式脚手架与超时重试策略，避免副本间行为分叉。
+   * 简历输入按预算截断（长简历与长 JD 是所有链的共同上游），
+   * 人设变量与报告链同源（buildPersonaVariables）。
    */
-  private async invokeStructured<T>(
-    params: StructuredInvokeParams,
-  ): Promise<T> {
-    const chain = PromptTemplate.fromTemplate(params.promptTemplate)
-      .pipe(params.llm)
-      .pipe(this.aiService.createRobustStructuredParser(params.schema));
-    return invokeChainWithRetry<T>(chain, params.variables, {
-      timeoutMs: ANALYSIS_TIMEOUT_MS,
-      retries: AI_INVOKE_RETRIES,
-      label: params.label,
-      validate: params.validate,
-    });
-  }
-
-  /** 四类出题链共享的提示词变量：JD/简历上下文与面试官人设 */
-  private baseChainVariables(
-    jobDescription: string,
-    resumeContent: string,
-    levelConfig: ResolvedLevelConfig,
-  ): Record<string, string> {
+  private chainVariables(params: {
+    resume: Record<string, any>;
+    jobDescription: string;
+    levelConfig: ResolvedLevelConfig;
+  }): Record<string, string> {
+    const { resumeContent, jobDescription } = buildTruncatedAnalysisContext(
+      params.resume,
+      params.jobDescription,
+      ANALYSIS_INPUT_BUDGET,
+    );
     return {
       jd: jobDescription,
       resume_content: resumeContent,
-      mode_desc: INTERVIEW_MODE_PROMPTS[levelConfig.mode],
-      stage_desc: INTERVIEW_STAGE_PROMPTS[levelConfig.stage],
-      experience_level_desc:
-        EXPERIENCE_LEVEL_PROMPTS[levelConfig.experienceLevel],
+      ...buildPersonaVariables(params.levelConfig),
     };
   }
 }
@@ -332,19 +258,24 @@ export class QuestionEngineService {
 /**
  * 按结束政策生成注入提示词的说明文字，
  * 让模型明确知道自己当前是否有结束主体考察的权限
+ *
+ * 阈值一律从 level.constants 取值（与 resolveEndPolicy 同源）：
+ * 文案里写死数字会在常量调整后与服务端实际政策分叉，
+ * 让模型按过期的规则决定是否收尾。
  */
 function formatEndPolicyDesc(
   policy: EndPolicy,
   elapsedMinutes: number,
   askedCount: number,
 ): string {
+  const minMinutes = MIN_MAIN_DURATION_MS / 60_000;
   switch (policy) {
     case 'must_end':
       return `必须结束：面试已进行 ${elapsedMinutes} 分钟，达到时长上限，现在必须输出自然收尾语并引导候选人反问（shouldEndMainPhase=true）`;
     case 'can_end':
       return `可以结束：面试已进行 ${elapsedMinutes} 分钟、已提问 ${askedCount} 个问题，你可以根据候选人整体表现与主题覆盖情况，决定是否进入结束环节`;
     default:
-      return `禁止结束：面试进行 ${elapsedMinutes} 分钟、已提问 ${askedCount} 个问题，尚未同时满足「满 30 分钟」与「超过 15 题」的收尾条件，必须继续出题（shouldEndMainPhase=false）；唯一例外：候选人明确要求终止/放弃本次面试时，按候选人意愿输出告别语并置 userRequestedEnd=true`;
+      return `禁止结束：面试进行 ${elapsedMinutes} 分钟、已提问 ${askedCount} 个问题，尚未同时满足「满 ${minMinutes} 分钟」与「超过 ${SOFT_MAX_MAIN_QUESTIONS} 题」的收尾条件，必须继续出题（shouldEndMainPhase=false）；唯一例外：候选人明确要求终止/放弃本次面试时，按候选人意愿输出告别语并置 userRequestedEnd=true`;
   }
 }
 
@@ -383,16 +314,4 @@ function normalizeOutlineTopics(
 function countQuestionMarks(text: string): number {
   const withoutOperators = text.replace(/\?\./g, '').replace(/\?\?/g, '');
   return (withoutOperators.match(/[?？]/g) ?? []).length;
-}
-
-function formatConversationHistory(messages: InterviewMessage[]): string {
-  return messages
-    .slice(-HISTORY_MESSAGE_LIMIT)
-    .map(
-      (message) =>
-        `${
-          message.role === MessageRoleEnum.Interviewer ? '面试官' : '候选人'
-        }：${message.content}`,
-    )
-    .join('\n');
 }

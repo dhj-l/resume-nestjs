@@ -29,6 +29,15 @@ export class AiService {
     } else if (thinking === 'enabled' && reasoningEffort) {
       modelKwargs.thinking = { type: 'enabled' };
       modelKwargs.reasoning_effort = reasoningEffort;
+      // 集中守卫：思考模式下 response_format=json_object 会让模型把回答
+      // 整体写入思考通道、正文 content 为空（见 0b37379）。工厂方法无需
+      // 各自维护三元条件，未来新增调用也在此被拦截
+      if (modelKwargs.response_format) {
+        delete modelKwargs.response_format;
+        this.logger.warn(
+          'thinking 模式下已剥离 response_format=json_object（叠加会导致正文为空）',
+        );
+      }
     }
 
     const chat = new ChatDeepSeek({
@@ -140,16 +149,14 @@ export class AiService {
   generateInterviewQuestion(mode?: DeepSeekThinkingMode) {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
     const thinkingMode = mode ?? this.resolveThinkingMode();
+    // 思考模式下 response_format 由 createDefaultDeepSeek 集中剥离
     const chat = this.createDefaultDeepSeek({
       apiKey,
       temperature: 0.6,
       maxTokens: 6000,
       thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
       reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
-      modelKwargs:
-        thinkingMode === 'disabled'
-          ? { response_format: { type: 'json_object' } }
-          : undefined,
+      modelKwargs: { response_format: { type: 'json_object' } },
     });
     return chat;
   }
@@ -184,16 +191,14 @@ export class AiService {
   generateInterviewReport(mode?: DeepSeekThinkingMode) {
     const apiKey = this.config.getOrThrow<string>('DEEPSEEK_API_KEY');
     const thinkingMode = mode ?? 'medium';
+    // 思考模式下 response_format 由 createDefaultDeepSeek 集中剥离
     const chat = this.createDefaultDeepSeek({
       apiKey,
       temperature: 0.2,
       maxTokens: 16000,
       thinking: thinkingMode === 'disabled' ? 'disabled' : 'enabled',
       reasoningEffort: thinkingMode === 'disabled' ? undefined : thinkingMode,
-      modelKwargs:
-        thinkingMode === 'disabled'
-          ? { response_format: { type: 'json_object' } }
-          : undefined,
+      modelKwargs: { response_format: { type: 'json_object' } },
     });
     return chat;
   }

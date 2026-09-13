@@ -70,6 +70,47 @@ describe('InterviewController', () => {
     ).rejects.toThrow('服务器内部错误');
   });
 
+  it('submitAnswer should wrap unknown errors as internal server error', async () => {
+    mockService.submitAnswer.mockRejectedValue(new Error('boom'));
+    await expect(
+      controller.submitAnswer(
+        '507f1f77bcf86cd799439011',
+        { content: '回答' },
+        req as any,
+      ),
+    ).rejects.toThrow('服务器内部错误');
+  });
+
+  it('finishSession should pass business exceptions through unchanged', async () => {
+    mockService.finishSession.mockRejectedValue(
+      new ConflictException('该面试会话已结束'),
+    );
+    await expect(
+      controller.finishSession('507f1f77bcf86cd799439011', req as any),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('reverse-suggestions should wrap the list as { suggestions } per the API contract', async () => {
+    // docs/api/mock-interview.md 第 6 节：data 为 { suggestions: [...] }
+    const suggestions = [
+      { title: '团队技术栈', content: '想了解团队核心的技术栈？' },
+    ];
+    mockService.getReverseSuggestions = jest
+      .fn()
+      .mockResolvedValue(suggestions);
+
+    const result = await controller.getReverseSuggestions(
+      '507f1f77bcf86cd799439011',
+      req as any,
+    );
+
+    expect(result).toEqual({ suggestions });
+    expect(mockService.getReverseSuggestions).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439011',
+      'user-1',
+    );
+  });
+
   it('getCurrentSession should return active flag and session', async () => {
     mockService.getCurrentSession.mockResolvedValue(null);
     expect(await controller.getCurrentSession(req as any)).toEqual({

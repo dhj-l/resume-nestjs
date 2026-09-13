@@ -14,6 +14,7 @@ import { TtsService } from 'src/ai/tts.service';
 import { InterviewService, SseEvent } from './interview.service';
 import {
   ExperienceLevelEnum,
+  INACTIVITY_TIMEOUT_MS,
   InterviewModeEnum,
   InterviewStageEnum,
   MAX_REVERSE_QUESTIONS,
@@ -32,6 +33,7 @@ describe('InterviewService - 模拟面试编排', () => {
     findOne: jest.fn(),
     findOneAndUpdate: jest.fn(),
     findByIdAndUpdate: jest.fn(),
+    findById: jest.fn(),
     updateMany: jest.fn(),
     updateOne: jest.fn(),
     deleteOne: jest.fn(),
@@ -55,6 +57,7 @@ describe('InterviewService - 模拟面试编排', () => {
   const mockTts = {
     synthesize: jest.fn(),
     synthesizeStream: jest.fn(),
+    synthesizePcm: jest.fn(),
   } as any;
 
   const mockTtsCacheModel = {
@@ -156,7 +159,7 @@ describe('InterviewService - 模拟面试编排', () => {
       const reserved = { _id: 'reserved-1', currentRound: 1 };
       mockSessionModel.create.mockResolvedValue(reserved);
       const filled = { ...reserved, outline, currentRound: 1 };
-      mockSessionModel.findByIdAndUpdate.mockResolvedValue(filled);
+      mockSessionModel.findOneAndUpdate.mockResolvedValue(filled);
 
       const result = await service.createSession(createDto, userId);
 
@@ -180,8 +183,14 @@ describe('InterviewService - 模拟面试编排', () => {
       );
       // AI 完成后回填大纲与首题；首题为本地模板的自我介绍引导
       expect(mockEngine.generateTurn).not.toHaveBeenCalled();
-      expect(mockSessionModel.findByIdAndUpdate).toHaveBeenCalledWith(
-        'reserved-1',
+      // 回填以 (in_progress, 无消息) 为前置条件：生成期间占位被并发关闭
+      // 或用户已抢答时不得覆盖
+      expect(mockSessionModel.findOneAndUpdate).toHaveBeenCalledWith(
+        {
+          _id: 'reserved-1',
+          status: 'in_progress',
+          'messages.0': { $exists: false },
+        },
         {
           $set: {
             outline,
@@ -203,11 +212,53 @@ describe('InterviewService - 模拟面试编排', () => {
       );
     });
 
+    it('should skip the outline fill and return the current session when it was already used', async () => {
+      setupHappyPath();
+      const reserved = { _id: 'reserved-1', currentRound: 1, messages: [] };
+      mockSessionModel.create.mockResolvedValue(reserved);
+      // 回填前置条件未命中：生成期间用户已抢答
+      mockSessionModel.findOneAndUpdate.mockResolvedValue(null);
+      const current = {
+        ...reserved,
+        status: 'in_progress',
+        messages: [{ role: 'candidate', content: '抢答内容', round: 1 }],
+      };
+      mockSessionModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(current),
+      });
+
+      const result = await service.createSession(createDto, userId);
+
+      // 返回会话现状，不覆盖已发生的变化
+      expect(result).toEqual(current);
+      expect(mockSessionModel.findById).toHaveBeenCalledWith('reserved-1');
+    });
+
+    it('should reject with conflict when the placeholder was closed during outline generation', async () => {
+      setupHappyPath();
+      const reserved = { _id: 'reserved-1', currentRound: 1, messages: [] };
+      mockSessionModel.create.mockResolvedValue(reserved);
+      // 占位会话在生成大纲期间已过期被清扫/被并发关闭：
+      // 返回它会让客户端拿到一个不可用的「创建成功」会话
+      mockSessionModel.findOneAndUpdate.mockResolvedValue(null);
+      mockSessionModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          ...reserved,
+          status: 'cancelled',
+          endedReason: 'timeout',
+        }),
+      });
+
+      await expect(service.createSession(createDto, userId)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
     it('should normalize campus mode experience level to junior', async () => {
       setupHappyPath();
       const reserved = { _id: 'reserved-1' };
       mockSessionModel.create.mockResolvedValue(reserved);
-      mockSessionModel.findByIdAndUpdate.mockResolvedValue(reserved);
+      mockSessionModel.findOneAndUpdate.mockResolvedValue(reserved);
 
       await service.createSession(
         {
@@ -254,6 +305,20 @@ describe('InterviewService - 模拟面试编排', () => {
       expect(mockSessionModel.create).not.toHaveBeenCalled();
     });
 
+    it('should reject a missing levelConfig with 400 before touching the database', async () => {
+      // 纯入参校验必须先于任何 DB 访问：否则这里会退化成 500，
+      // 或（已有进行中会话时）被 409 掩盖成"先完成旧面试"
+      await expect(
+        service.createSession(
+          { ...createDto, levelConfig: undefined } as any,
+          userId,
+        ),
+      ).rejects.toThrow('mode 与 stage 为必填项');
+      expect(mockResumeModel.findOne).not.toHaveBeenCalled();
+      expect(mockSessionModel.findOne).not.toHaveBeenCalled();
+      expect(mockSessionModel.create).not.toHaveBeenCalled();
+    });
+
     it('should reject an invalid JD', async () => {
       await expect(
         service.createSession({ ...createDto, jobDescription: '太短' }, userId),
@@ -294,16 +359,19 @@ describe('InterviewService - 模拟面试编排', () => {
       });
       const reserved = { _id: 'reserved-1' };
       mockSessionModel.create.mockResolvedValue(reserved);
-      mockSessionModel.findByIdAndUpdate.mockResolvedValue(reserved);
+      mockSessionModel.findOneAndUpdate.mockResolvedValue(reserved);
       mockEngine.generateOutline.mockResolvedValue(outline);
 
       const result = await service.createSession(createDto, userId);
 
       expect(result).toEqual(reserved);
-      // 残留会话以 timeout 关闭，随后正常创建新会话
-      const [staleId, staleUpdate] =
-        mockSessionModel.findByIdAndUpdate.mock.calls[0];
-      expect(staleId).toBe('stale');
+      // 残留会话以 timeout 关闭（仅命中 in_progress），随后正常创建新会话
+      const [staleFilter, staleUpdate] =
+        mockSessionModel.findOneAndUpdate.mock.calls[0];
+      expect(staleFilter).toEqual({
+        _id: 'stale',
+        status: 'in_progress',
+      });
       expect(staleUpdate.$set.status).toBe('cancelled');
       expect(staleUpdate.$set.endedReason).toBe('timeout');
       expect(mockSessionModel.create).toHaveBeenCalled();
@@ -313,14 +381,15 @@ describe('InterviewService - 模拟面试编排', () => {
       setupHappyPath();
       const reserved = { _id: 'reserved-1' };
       mockSessionModel.create.mockResolvedValue(reserved);
-      mockSessionModel.findByIdAndUpdate.mockResolvedValue(reserved);
+      mockSessionModel.findOneAndUpdate.mockResolvedValue(reserved);
 
       await service.createSession(createDto, userId);
 
       const created = mockSessionModel.create.mock.calls[0][0];
       const expiresAt = created.expiresAt as Date;
-      expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 3 * 60_000);
-      // 占位窗口远小于完整不活动窗口（45 分钟），崩溃残留不会长期阻塞新建
+      // 窗口需覆盖大纲生成最坏耗时（120s × 3 = 6 分钟），取 8 分钟
+      expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 8 * 60_000);
+      // 占位窗口仍远小于完整不活动窗口（45 分钟），崩溃残留不会长期阻塞新建
       expect(expiresAt.getTime()).toBeLessThan(
         Date.now() + 45 * 60_000 - 60_000,
       );
@@ -366,17 +435,52 @@ describe('InterviewService - 模拟面试编排', () => {
         expiresAt: new Date(Date.now() - 1000),
       });
       mockSessionModel.findOne.mockResolvedValue(expired);
-      mockSessionModel.findByIdAndUpdate.mockResolvedValue(expired);
+      // 复用同一个对象作为库返回：断言内存状态是同步来的，而非本来就一致
+      mockSessionModel.findOneAndUpdate.mockResolvedValue({ _id: SESSION_ID });
 
       const result = await service.getCurrentSession(userId);
 
       // 超时会话应被关闭并返回（前端据此提示"上次面试因超时已关闭"）
       expect(result!.status).toBe('cancelled');
       expect(result!.endedReason).toBe('timeout');
-      expect(mockSessionModel.findByIdAndUpdate).toHaveBeenCalledWith(
-        SESSION_ID,
+      // 关闭写库与返回体同源（timeoutCloseFields）：只同步 status/endedReason
+      // 会让前端拿不到 endedAt，返回体与库内不一致
+      const [, closeUpdate] = mockSessionModel.findOneAndUpdate.mock.calls[0];
+      expect(closeUpdate.$set.endedAt).toBeInstanceOf(Date);
+      expect(result!.endedAt).toBeInstanceOf(Date);
+      expect(result!.endedAt!.getTime()).toBe(
+        closeUpdate.$set.endedAt.getTime(),
+      );
+      // 关闭以 status=in_progress 为前置条件，不覆盖并发完成的会话终态
+      expect(mockSessionModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: SESSION_ID, status: 'in_progress' },
         expect.anything(),
       );
+    });
+
+    it('should sync the real terminal state when the session was closed concurrently', async () => {
+      const expired = buildActiveSession({
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      const endedAt = new Date();
+      mockSessionModel.findOne.mockResolvedValue(expired);
+      // 条件更新未命中：并发的收尾/中断已经赢了这次关闭
+      mockSessionModel.findOneAndUpdate.mockResolvedValue(null);
+      mockSessionModel.findById.mockReturnValue({
+        lean: () =>
+          Promise.resolve({
+            status: 'completed',
+            endedReason: 'completed',
+            endedAt,
+          }),
+      });
+
+      const result = await service.getCurrentSession(userId);
+
+      // 未命中时不得改写终态，且内存文档须同步为 DB 现状（含 endedAt）
+      expect(result!.status).toBe('completed');
+      expect(result!.endedReason).toBe('completed');
+      expect(result!.endedAt).toBe(endedAt);
     });
   });
 
@@ -426,13 +530,23 @@ describe('InterviewService - 模拟面试编排', () => {
       expect(result.elapsedMinutes).toBe(10);
       // 追加回答 + 写下一题两次条件更新
       expect(mockSessionModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
-      // 追加回答：以 (status, currentRound) 为前置条件，竞态时不生效
+      // 追加回答：以 (status, currentRound) 为前置条件，竞态时不生效；
+      // messages 过滤条件保证同轮次不出现重复内容的候选人消息
       const [appendFilter, appendUpdate] =
         mockSessionModel.findOneAndUpdate.mock.calls[0];
       expect(appendFilter).toEqual({
         _id: SESSION_ID,
         status: 'in_progress',
         currentRound: 2,
+        messages: {
+          $not: {
+            $elemMatch: {
+              role: 'candidate',
+              round: 2,
+              content: '我的回答是……',
+            },
+          },
+        },
       });
       expect(appendUpdate.$push.messages).toMatchObject({
         role: 'candidate',
@@ -441,9 +555,14 @@ describe('InterviewService - 模拟面试编排', () => {
       });
       expect(appendUpdate.$set.expiresAt).toBeInstanceOf(Date);
       // 逐题反馈通过 arrayFilters 回写到本轮被评估的那条候选人消息
-      // （含内容匹配：同轮重试换答案时反馈只落在新答案上）
+      // （含内容匹配：同轮重试换答案时反馈只落在新答案上）；
+      // 与其余会话写入同口径，带 (status, currentRound) 前置条件
       expect(mockSessionModel.updateOne).toHaveBeenCalledWith(
-        { _id: SESSION_ID },
+        {
+          _id: SESSION_ID,
+          status: 'in_progress',
+          currentRound: 2,
+        },
         {
           $set: { 'messages.$[msg].feedback': validTurn.feedback },
         },
@@ -473,6 +592,35 @@ describe('InterviewService - 模拟面试编排', () => {
       });
       expect(nextUpdate.$set.currentRound).toBe(3);
       expect(nextUpdate.$set.askedTopicKeys).toEqual(['topic-a', 'topic-b']);
+    });
+
+    it('should reject a whitespace-only answer before any write or AI call', async () => {
+      const session = buildActiveSession({ currentRound: 2 });
+      mockSessionModel.findOne.mockResolvedValue(session);
+
+      await expect(
+        service.submitAnswer(session._id, { content: '   ' } as any, userId),
+      ).rejects.toThrow('回答内容不能为空');
+      expect(mockSessionModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(mockEngine.generateTurn).not.toHaveBeenCalled();
+    });
+
+    it('should keep interviewing when the resume was deleted mid-session', async () => {
+      // 简历在面试进行中被硬删时降级为空的简历上下文：否则每次答题都
+      // 400「简历不存在」，面试会卡死到超时（只能 /finish 或 /cancel）
+      const session = buildActiveSession({ currentRound: 2 });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(null),
+      });
+      mockEngine.generateTurn.mockResolvedValue(validTurn);
+
+      const result = await service.submitAnswer(session._id, answerDto, userId);
+
+      expect(result.finished).toBe(false);
+      expect(result.nextQuestion).toBe('下一题：讲讲索引原理。');
+      expect(mockEngine.generateTurn.mock.calls[0][0].resume).toEqual({});
     });
 
     it('should reject with conflict when the answer round was concurrently advanced', async () => {
@@ -506,6 +654,40 @@ describe('InterviewService - 模拟面试编排', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('should roll back the appended answer when the turn generation fails', async () => {
+      const session = buildActiveSession({ currentRound: 2 });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(resumeDoc),
+      });
+      mockEngine.generateTurn.mockRejectedValue(new Error('AI 超时'));
+
+      await expect(
+        service.submitAnswer(session._id, answerDto, userId),
+      ).rejects.toThrow('AI 超时');
+
+      // 被放弃的回答应从转录中移除（带 in_progress/round 前置条件），
+      // 不再以无反馈回答的形态混入报告
+      expect(mockSessionModel.updateOne).toHaveBeenCalledWith(
+        {
+          _id: SESSION_ID,
+          status: 'in_progress',
+          currentRound: 2,
+        },
+        {
+          $pull: {
+            messages: {
+              role: 'candidate',
+              round: 2,
+              content: '我的回答是……',
+              kind: 'answer',
+            },
+          },
+        },
+      );
+    });
+
     it('should not re-append the same answer when retrying after a failed generation', async () => {
       const lastAnswer = {
         role: 'candidate',
@@ -528,22 +710,28 @@ describe('InterviewService - 模拟面试编排', () => {
 
       expect(result.finished).toBe(false);
       // 同轮次同内容的回答已在库（上次出题失败前的落库），不应重复 $push；
-      // 但仍应以 findByIdAndUpdate 刷新活跃窗口
-      expect(mockSessionModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
-      // 唯一一次条件写入是下一题（interviewer 消息），没有再追加候选人回答
-      const [nextFilter, nextUpdate] =
+      // 但仍应以条件更新刷新活跃窗口
+      expect(mockSessionModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+      // 第一次条件写入是活跃窗口刷新（带 status/round 前置条件：
+      // 会话已被并发收尾时不得续期，也不应继续触发付费 LLM 调用）
+      const [refreshFilter, refreshUpdate] =
         mockSessionModel.findOneAndUpdate.mock.calls[0];
+      expect(refreshFilter).toEqual({
+        _id: SESSION_ID,
+        status: 'in_progress',
+        currentRound: 2,
+      });
+      expect(refreshUpdate.$set).toMatchObject({
+        expiresAt: expect.any(Date),
+      });
+      // 第二次条件写入是下一题（interviewer 消息），没有再追加候选人回答
+      const [nextFilter, nextUpdate] =
+        mockSessionModel.findOneAndUpdate.mock.calls[1];
       expect(nextFilter).toMatchObject({ currentRound: 2 });
       expect(nextUpdate.$push.messages).toMatchObject({
         role: 'interviewer',
         round: 3,
       });
-      expect(mockSessionModel.findByIdAndUpdate).toHaveBeenCalledWith(
-        SESSION_ID,
-        expect.objectContaining({
-          $set: expect.objectContaining({ expiresAt: expect.any(Date) }),
-        }),
-      );
       // 回合决策引擎仍应看到本轮回答
       expect(mockEngine.generateTurn.mock.calls[0][0].messages).toContainEqual(
         expect.objectContaining({ content: '我的回答是……' }),
@@ -833,6 +1021,37 @@ describe('InterviewService - 模拟面试编排', () => {
       });
     });
 
+    it('should roll back the appended reverse question when the response generation fails', async () => {
+      const session = buildReverseSession();
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(resumeDoc),
+      });
+      mockEngine.generateReverseResponse.mockRejectedValue(
+        new Error('AI 超时'),
+      );
+
+      await expect(
+        service.submitAnswer(session._id, answerDto, userId),
+      ).rejects.toThrow('AI 超时');
+
+      // 被放弃的反问不得留在转录里（会以"无回应反问"形态混进报告）
+      expect(mockSessionModel.updateOne).toHaveBeenCalledWith(
+        { _id: SESSION_ID, status: 'in_progress', currentRound: 10 },
+        {
+          $pull: {
+            messages: {
+              role: 'candidate',
+              round: 10,
+              content: answerDto.content,
+              kind: 'answer',
+            },
+          },
+        },
+      );
+    });
+
     it('should complete with a report when the candidate has no more questions', async () => {
       const session = buildReverseSession();
       mockSessionModel.findOne.mockResolvedValue(session);
@@ -904,6 +1123,68 @@ describe('InterviewService - 模拟面试编排', () => {
       });
       expect(result.finished).toBe(true);
       expect(result.farewell).toBe('好的，今天的面试就到这里，感谢你的时间。');
+    });
+
+    it('should retry only the report when the previous closing turn failed to generate it', async () => {
+      // 报告生成失败后的会话状态：收尾消息已落库、pendingReportReason 标记
+      // 存在、状态仍是 in_progress（报告链路最长 8 分钟且可能失败）
+      const farewell = '好的，今天的面试就到这里，感谢你的时间。';
+      const session = buildReverseSession({
+        currentRound: 11,
+        pendingReportReason: 'completed',
+        messages: [
+          {
+            role: 'interviewer',
+            content: '我的问题问完了，你有什么想问我的吗？',
+            round: 10,
+            kind: 'question',
+            questionType: 'reverse',
+          },
+          {
+            role: 'candidate',
+            content: '想了解一下团队现在的技术栈？',
+            round: 10,
+            kind: 'answer',
+            questionType: 'reverse',
+          },
+          {
+            role: 'interviewer',
+            content: farewell,
+            round: 11,
+            kind: 'question',
+            questionType: 'reverse',
+          },
+        ],
+      });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockEvaluation.generateReport.mockResolvedValue({ overallScore: 82 });
+
+      const progressEvents: SseEvent[] = [];
+      const result = await service.submitAnswer(
+        session._id,
+        answerDto,
+        userId,
+        (event) => progressEvents.push(event),
+      );
+
+      // 对话不再推进：不重复调用反问/出题链，也不追加任何消息
+      expect(mockEngine.generateReverseResponse).not.toHaveBeenCalled();
+      expect(mockEngine.generateTurn).not.toHaveBeenCalled();
+      expect(
+        mockSessionModel.findOneAndUpdate.mock.calls.some(
+          ([, update]) => update?.$push?.messages,
+        ),
+      ).toBe(false);
+      // 只补生成报告；告别语从转录末条面试官消息还原并重推 closing 事件
+      expect(mockEvaluation.generateReport).toHaveBeenCalledTimes(1);
+      expect(result.finished).toBe(true);
+      expect(result.endedReason).toBe('completed');
+      expect(result.farewell).toBe(farewell);
+      expect(progressEvents[0]).toMatchObject({
+        type: 'closing',
+        data: { farewell, round: 11, phase: 'reverse' },
+      });
     });
 
     it(`should force completion after ${MAX_REVERSE_QUESTIONS} reverse questions`, async () => {
@@ -984,6 +1265,22 @@ describe('InterviewService - 模拟面试编排', () => {
         service.getReverseSuggestions(SESSION_ID, userId),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('should still suggest when the resume was deleted mid-session', async () => {
+      // 与答题链路同一降级策略：简历缺失只是少了上下文，不该让接口整体 400
+      const session = buildActiveSession();
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(null),
+      });
+      mockEngine.generateReverseSuggestions.mockResolvedValue([]);
+
+      await service.getReverseSuggestions(SESSION_ID, userId);
+
+      expect(mockEngine.generateReverseSuggestions).toHaveBeenCalledWith(
+        expect.objectContaining({ resume: {} }),
+      );
+    });
   });
 
   describe('cancelSession / finishSession', () => {
@@ -1034,6 +1331,61 @@ describe('InterviewService - 模拟面试编排', () => {
       const [filter] = mockSessionModel.findOneAndUpdate.mock.calls[0];
       expect(filter).toEqual({ _id: SESSION_ID, status: 'in_progress' });
     });
+
+    it('should keep the session alive while the report is generating', async () => {
+      // 报告链路最长 2×240s：收尾标记若只刷 lastActivityAt 而不续 expiresAt，
+      // 会话会在生成期间被超时清扫改成 cancelled，报告落库的 status 前置条件
+      // 失配 → 已付费生成的报告被丢弃，且用户无法重试
+      const session = buildActiveSession({
+        currentRound: 3,
+        messages: buildAskedQuestions(3),
+        expiresAt: new Date(Date.now() + 30_000),
+      });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockSessionModel.findOneAndUpdate.mockReturnValue({
+        lean: () => Promise.resolve({ ...session, status: 'completed' }),
+      });
+      mockEvaluation.generateReport.mockResolvedValue({ overallScore: 70 });
+
+      await service.finishSession(SESSION_ID, userId);
+
+      const [markFilter, markUpdate] =
+        mockSessionModel.findOneAndUpdate.mock.calls[0];
+      expect(markFilter).toEqual({ _id: SESSION_ID, status: 'in_progress' });
+      expect(markUpdate.$set.pendingReportReason).toBe('user_finish');
+      expect(markUpdate.$set.expiresAt).toBeInstanceOf(Date);
+      expect(markUpdate.$set.expiresAt.getTime()).toBeGreaterThan(
+        Date.now() + INACTIVITY_TIMEOUT_MS - 60_000,
+      );
+    });
+
+    it('should keep the original end reason when finishing a session pending report', async () => {
+      // 反问自然收尾后报告生成失败：用户点「收尾出报告」重试时，
+      // 结束原因应沿用 completed，不能覆写成 user_finish
+      const session = buildActiveSession({
+        phase: 'reverse',
+        currentRound: 4,
+        messages: buildAskedQuestions(3),
+        pendingReportReason: 'completed',
+      });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockSessionModel.findOneAndUpdate.mockReturnValue({
+        lean: () => Promise.resolve({ ...session, status: 'completed' }),
+      });
+      mockEvaluation.generateReport.mockResolvedValue({ overallScore: 70 });
+
+      await service.finishSession(SESSION_ID, userId);
+
+      // 先落收尾标记再生成报告，最后以 status 为前置条件收尾
+      const [markFilter, markUpdate] =
+        mockSessionModel.findOneAndUpdate.mock.calls[0];
+      expect(markFilter).toEqual({ _id: SESSION_ID, status: 'in_progress' });
+      expect(markUpdate.$set.pendingReportReason).toBe('completed');
+      const [, finalUpdate] =
+        mockSessionModel.findOneAndUpdate.mock.calls.at(-1);
+      expect(finalUpdate.$set.endedReason).toBe('completed');
+      expect(finalUpdate.$unset).toEqual({ pendingReportReason: 1 });
+    });
   });
 
   describe('getReport', () => {
@@ -1075,20 +1427,52 @@ describe('InterviewService - 模拟面试编排', () => {
       mockTtsCacheModel.updateOne.mockResolvedValue({});
     });
 
-    it('should synthesize streamed pcm and wrap it into wav', async () => {
+    it('should synthesize pcm via tts service and wrap it into wav', async () => {
       mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
-      mockTts.synthesizeStream.mockResolvedValue(
-        makeTtsStreamHandle([Buffer.from('pcm-bytes')]),
-      );
+      mockTts.synthesizePcm.mockResolvedValue({
+        pcm: Buffer.from('pcm-bytes'),
+        meta: { sampleRate: 24000, channels: 1 },
+      });
 
       const result = await service.getQuestionAudio(SESSION_ID, userId, 1);
 
       expect(result.mimeType).toBe('audio/wav');
       expect(result.buffer.subarray(0, 4).toString('ascii')).toBe('RIFF');
       expect(result.buffer.subarray(44).toString()).toBe('pcm-bytes');
-      expect(mockTts.synthesizeStream).toHaveBeenCalledWith(
+      // 聚合逻辑统一走 synthesizePcm，不再复刻 for-await 消费循环
+      expect(mockTts.synthesizePcm).toHaveBeenCalledWith(
         '第一题：请介绍一下事件循环。',
       );
+      expect(mockTts.synthesizeStream).not.toHaveBeenCalled();
+    });
+
+    it('should share one in-flight synthesis for concurrent misses (single-flight)', async () => {
+      mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
+      let resolveSynthesis!: (value: any) => void;
+      mockTts.synthesizePcm.mockReturnValue(
+        new Promise((resolve) => (resolveSynthesis = resolve)),
+      );
+
+      const both = Promise.all([
+        service.getQuestionAudio(SESSION_ID, userId, 1),
+        service.getQuestionAudio(SESSION_ID, userId, 1),
+      ]);
+      // 等两个请求都进入合成等待（微任务队列清空）后再完成合成
+      await new Promise((resolve) => setImmediate(resolve));
+      resolveSynthesis({
+        pcm: Buffer.from('shared-pcm'),
+        meta: { sampleRate: 24000, channels: 1 },
+      });
+      const [first, second] = await both;
+
+      // 同一 (sessionId, round) 的并发未命中只发起一次付费合成
+      expect(mockTts.synthesizePcm).toHaveBeenCalledTimes(1);
+      expect(first.buffer.subarray(44).toString()).toBe('shared-pcm');
+      expect(second.buffer.subarray(44).toString()).toBe('shared-pcm');
+
+      // 完成后在途记录清除：后续未命中可重新合成（如缓存写失败场景）
+      await service.getQuestionAudio(SESSION_ID, userId, 1);
+      expect(mockTts.synthesizePcm).toHaveBeenCalledTimes(2);
     });
 
     it('should return cached pcm (wrapped) without calling tts again', async () => {
@@ -1105,7 +1489,7 @@ describe('InterviewService - 模拟面试编排', () => {
 
       expect(result.mimeType).toBe('audio/wav');
       expect(result.buffer.subarray(44).toString()).toBe('cached-pcm');
-      expect(mockTts.synthesizeStream).not.toHaveBeenCalled();
+      expect(mockTts.synthesizePcm).not.toHaveBeenCalled();
       expect(mockTtsCacheModel.updateOne).not.toHaveBeenCalled();
     });
 
@@ -1124,7 +1508,7 @@ describe('InterviewService - 模拟面试编排', () => {
 
       expect(result.mimeType).toBe('audio/wav');
       expect(result.buffer.subarray(44).toString()).toBe('cached-pcm');
-      expect(mockTts.synthesizeStream).not.toHaveBeenCalled();
+      expect(mockTts.synthesizePcm).not.toHaveBeenCalled();
     });
 
     it('should treat legacy wav cache (no sampleRate) as stale and regenerate', async () => {
@@ -1135,13 +1519,14 @@ describe('InterviewService - 模拟面试编排', () => {
           mimeType: 'audio/wav',
         }),
       });
-      mockTts.synthesizeStream.mockResolvedValue(
-        makeTtsStreamHandle([Buffer.from('fresh-pcm')]),
-      );
+      mockTts.synthesizePcm.mockResolvedValue({
+        pcm: Buffer.from('fresh-pcm'),
+        meta: { sampleRate: 24000, channels: 1 },
+      });
 
       await service.getQuestionAudio(SESSION_ID, userId, 1);
 
-      expect(mockTts.synthesizeStream).toHaveBeenCalled();
+      expect(mockTts.synthesizePcm).toHaveBeenCalled();
       expect(mockTtsCacheModel.updateOne).toHaveBeenCalledWith(
         { sessionId: expect.anything(), round: 1 },
         {
@@ -1157,9 +1542,10 @@ describe('InterviewService - 模拟面试编排', () => {
 
     it('should upsert synthesized pcm into the cache', async () => {
       mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
-      mockTts.synthesizeStream.mockResolvedValue(
-        makeTtsStreamHandle([Buffer.from('fresh-pcm')]),
-      );
+      mockTts.synthesizePcm.mockResolvedValue({
+        pcm: Buffer.from('fresh-pcm'),
+        meta: { sampleRate: 24000, channels: 1 },
+      });
 
       await service.getQuestionAudio(SESSION_ID, userId, 1);
 
@@ -1184,9 +1570,10 @@ describe('InterviewService - 模拟面试编排', () => {
 
     it('should still return audio when caching fails', async () => {
       mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
-      mockTts.synthesizeStream.mockResolvedValue(
-        makeTtsStreamHandle([Buffer.from('pcm-bytes')]),
-      );
+      mockTts.synthesizePcm.mockResolvedValue({
+        pcm: Buffer.from('pcm-bytes'),
+        meta: { sampleRate: 24000, channels: 1 },
+      });
       mockTtsCacheModel.updateOne.mockRejectedValue(new Error('dup key'));
 
       await expect(
@@ -1200,9 +1587,10 @@ describe('InterviewService - 模拟面试编排', () => {
     it('should stay available for ended sessions (replay)', async () => {
       // 会话已 completed，回放场景仍可获取历史问题语音
       mockSessionModel.findOne.mockResolvedValue(sessionWithQuestion);
-      mockTts.synthesizeStream.mockResolvedValue(
-        makeTtsStreamHandle([Buffer.from('pcm')]),
-      );
+      mockTts.synthesizePcm.mockResolvedValue({
+        pcm: Buffer.from('pcm'),
+        meta: { sampleRate: 24000, channels: 1 },
+      });
 
       await expect(
         service.getQuestionAudio(SESSION_ID, userId, 1),
@@ -1215,7 +1603,7 @@ describe('InterviewService - 模拟面试编排', () => {
       await expect(
         service.getQuestionAudio(SESSION_ID, userId, 9),
       ).rejects.toThrow(BadRequestException);
-      expect(mockTts.synthesizeStream).not.toHaveBeenCalled();
+      expect(mockTts.synthesizePcm).not.toHaveBeenCalled();
     });
 
     it('should reject when session is not owned by the user', async () => {

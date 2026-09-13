@@ -6,6 +6,8 @@ import {
   ExperienceLevelEnum,
   InterviewModeEnum,
   InterviewStageEnum,
+  MIN_MAIN_DURATION_MS,
+  SOFT_MAX_MAIN_QUESTIONS,
 } from '../constants/level.constants';
 import type { InterviewMessage } from '../entities/interview-session.entity';
 import {
@@ -237,6 +239,41 @@ describe('QuestionEngineService - 出题引擎', () => {
       expect(capturedPrompt).toContain('已进行 35 分钟');
       expect(capturedPrompt).toContain('已提问 16 个问题');
       expect(capturedPrompt).toContain('可以结束');
+    });
+
+    it('should derive the cannot_end thresholds from the shared constants', async () => {
+      let capturedPrompt = '';
+      mockAiService.generateInterviewQuestion.mockImplementation(() =>
+        RunnableLambda.from(async (promptValue: { toString(): string }) => {
+          capturedPrompt = String(promptValue);
+          return JSON.stringify(validTurn);
+        }),
+      );
+      mockAiService.createRobustStructuredParser.mockReturnValue(
+        RunnableLambda.from(async (input: any) =>
+          typeof input === 'string' ? JSON.parse(input) : input,
+        ),
+      );
+
+      await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: [],
+        elapsedMinutes: 10,
+        askedCount: 3,
+        endPolicy: 'cannot_end',
+      });
+
+      // 阈值文案必须与 resolveEndPolicy 的判定同源，否则改常量会让
+      // 提示词描述的政策与服务端实际政策分叉
+      expect(capturedPrompt).toContain(
+        `满 ${MIN_MAIN_DURATION_MS / 60_000} 分钟`,
+      );
+      expect(capturedPrompt).toContain(`超过 ${SOFT_MAX_MAIN_QUESTIONS} 题`);
+      expect(capturedPrompt).toContain('禁止结束');
     });
 
     it('should describe the must_end policy as mandatory transition', async () => {

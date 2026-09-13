@@ -126,10 +126,13 @@ export const INACTIVITY_TIMEOUT_MS = 45 * 60 * 1000;
  *
  * 创建会话先落库占位再调 LLM 生成大纲；占位只授予该短窗口的过期时间，
  * 进程崩溃/发布重启残留的占位到期后即可被新建流程的过期检查释放，
- * 不会按完整不活动窗口（45 分钟）阻塞新建面试。大纲回填成功后
- * 过期时间才刷新为完整的 INACTIVITY_TIMEOUT_MS。
+ * 不会按完整不活动窗口（45 分钟）阻塞新建面试。
+ * 窗口必须覆盖大纲生成的最坏耗时：ANALYSIS_TIMEOUT_MS(120s) ×
+ * (AI_INVOKE_RETRIES+1)=6 分钟，取 8 分钟留缓冲——窗口短于生成耗时会让
+ * 正常创建流程中途过期，与并发流量互相误伤。
+ * 大纲回填成功后过期时间才刷新为完整的 INACTIVITY_TIMEOUT_MS。
  */
-export const OUTLINE_FILL_TIMEOUT_MS = 3 * 60 * 1000;
+export const OUTLINE_FILL_TIMEOUT_MS = 8 * 60 * 1000;
 
 /** 定时清扫过期会话的间隔（毫秒） */
 export const SWEEP_INTERVAL_MS = 5 * 60 * 1000;

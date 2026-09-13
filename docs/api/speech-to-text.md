@@ -13,7 +13,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `audio` | file | 是 | 音频二进制。支持 wav / webm / mp3 / mp4(m4a) / ogg / flac，单文件上限 20MB（路由层 multer 硬上限；`MIMO_ASR_MAX_BYTES` 只能进一步调低，调大需同步上调路由限制） |
+| `audio` | file | 是 | 音频二进制。支持 wav / webm / mp3 / mp4(m4a) / ogg / flac，单文件业务上限默认 20MB（`MIMO_ASR_MAX_BYTES` 可调）；上传路由另有 50MB 内存防滥用护栏，超过护栏直接 413 |
 
 ### 环境变量
 

@@ -57,11 +57,18 @@ const DEFAULT_ASR_MODEL = 'mimo-v2.5-asr';
 const DEFAULT_ASR_LANGUAGE = 'auto';
 /**
  * 上传音频大小上限（字节），默认 20MB。
- * 整段转写与句子级分片都远低于该值，主要防滥用。
- * 同时作为 STT 上传路由（FileInterceptor）的 multer 硬上限；
- * 若通过 MIMO_ASR_MAX_BYTES 调大，需同步上调路由层限制。
+ * 整段转写与句子级分片都远低于该值，主要防滥用。属业务上限，
+ * 可通过 MIMO_ASR_MAX_BYTES 调整（有效区间为不超过 STT_UPLOAD_GUARD_BYTES）。
  */
 export const STT_MAX_AUDIO_BYTES = 20 * 1024 * 1024;
+/**
+ * STT 上传路由的 multer 硬上限（字节），纯内存防滥用护栏。
+ *
+ * 与业务上限（MIMO_ASR_MAX_BYTES）职责解耦：护栏只保证单个请求最多
+ * 缓冲该体积，业务上限由 SttService 按环境变量独立校验，两处不再需要
+ * 注释维护同步；业务上限在护栏区间内调大无需改代码。
+ */
+export const STT_UPLOAD_GUARD_BYTES = 50 * 1024 * 1024;
 /**
  * STT 建连/请求超时（毫秒）。相比 TTS，识别含上传耗时，放宽到 60s。
  */
@@ -88,6 +95,8 @@ const ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
   'audio/mp3',
   'audio/mp4',
   'audio/m4a',
+  // Safari 等浏览器录制的 m4a 常见变体（错误提示与文档均承诺支持 m4a）
+  'audio/x-m4a',
   'audio/ogg',
   'audio/flac',
 ]);

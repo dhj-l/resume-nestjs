@@ -19,6 +19,7 @@ import { Observable } from 'rxjs';
 import { ParseObjectIdPipe } from '@nestjs/mongoose';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { initSseResponse, writeSseEvent } from 'src/common/sse.utils';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 import { SseMessage } from './types/sse.types';
 import { GetResumeRecordsDto } from 'src/resume-ai/dto/get-resume-record.dto';
@@ -97,17 +98,12 @@ export class ResumeAiController {
     }
 
     // 成功后再设置 SSE 响应头（CORS 由全局配置统一处理，不在此手动设置）
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
+    initSseResponse(res);
 
     // 订阅SSE消息流
     const subscription = sseObservable.subscribe({
       next: (message: SseMessage) => {
-        // 将SSE消息格式化为SSE格式
-        const sseData = `data: ${JSON.stringify(message)}\n\n`;
-        res.write(sseData);
+        writeSseEvent(res, message);
       },
       error: (error: Error) => {
         this.logger.error('SSE错误', error.stack);
@@ -120,7 +116,7 @@ export class ResumeAiController {
           currentModule: 0,
           resumeId: (error as any)?.resumeId,
         };
-        res.write(`data: ${JSON.stringify(errorMessage)}\n\n`);
+        writeSseEvent(res, errorMessage);
         res.end();
       },
       complete: () => {

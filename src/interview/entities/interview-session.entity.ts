@@ -245,6 +245,16 @@ export class InterviewSession {
   endedReason?: InterviewEndedReasonEnum;
 
   /**
+   * 收尾待出报告标记：告别语/收尾回应已落库、评价报告尚未生成
+   *
+   * 报告链路（长转录 + 思考模式）最长可达 8 分钟且可能失败，此时会话仍是
+   * in_progress：该标记让失败后的重试只补生成报告，不重复推进对话轮次
+   * （否则同一条回答/反问会二次写入转录并进入报告）。报告落库时清除。
+   */
+  @Prop({ type: String, enum: InterviewEndedReasonEnum })
+  pendingReportReason?: InterviewEndedReasonEnum;
+
+  /**
    * 会话开始时间
    */
   @Prop({ default: () => new Date() })

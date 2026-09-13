@@ -13,7 +13,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { type Express, type Request, type Response } from 'express';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
-import { SttService, SttStream, STT_MAX_AUDIO_BYTES } from './stt.service';
+import { initSseResponse, writeSseEvent } from 'src/common/sse.utils';
+import { SttService, SttStream, STT_UPLOAD_GUARD_BYTES } from './stt.service';
 
 /** SSE 事件：识别文本增量 / 完整结果 / 错误 */
 type SttSseEvent =
@@ -38,12 +39,13 @@ export class AiController {
    * 分句策略见 docs/api/speech-to-text.md）。
    */
   @Post('stt/stream')
-  // fileSize 在 multer 接收过程中流式拦截：内存存储下防止任意大小的
-  // multipart body 先整体缓冲进内存（与 SttService 的 20MB 校验同源）
+  // fileSize 是内存防滥用护栏（multer 接收过程中流式拦截，防止任意大小的
+  // multipart body 整体缓冲进内存）；业务上限由 SttService 按
+  // MIMO_ASR_MAX_BYTES 独立校验，两者职责解耦、无需保持同步
   @UseInterceptors(
     FileInterceptor('audio', {
       storage: memoryStorage(),
-      limits: { fileSize: STT_MAX_AUDIO_BYTES },
+      limits: { fileSize: STT_UPLOAD_GUARD_BYTES },
     }),
   )
   async transcribeStream(
@@ -92,31 +94,31 @@ export class AiController {
       return;
     }
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
+    initSseResponse(res);
 
     const fullText: string[] = [];
     try {
       for await (const delta of handle.iterator) {
         if (closed) break;
         fullText.push(delta);
-        res.write(
-          `data: ${JSON.stringify({ type: 'delta', text: delta } satisfies SttSseEvent)}\n\n`,
-        );
+        writeSseEvent(res, {
+          type: 'delta',
+          text: delta,
+        } satisfies SttSseEvent);
       }
       if (!closed) {
-        res.write(
-          `data: ${JSON.stringify({ type: 'done', text: fullText.join('') } satisfies SttSseEvent)}\n\n`,
-        );
+        writeSseEvent(res, {
+          type: 'done',
+          text: fullText.join(''),
+        } satisfies SttSseEvent);
       }
     } catch (error: any) {
       this.logger.error('语音识别SSE错误', error?.stack);
       if (!closed) {
-        res.write(
-          `data: ${JSON.stringify({ type: 'error', message: error?.message || '语音识别失败' } satisfies SttSseEvent)}\n\n`,
-        );
+        writeSseEvent(res, {
+          type: 'error',
+          message: error?.message || '语音识别失败',
+        } satisfies SttSseEvent);
       }
     } finally {
       // 双保险：断连时外部 signal 已中止真实上游，此处兜底中止句柄本身

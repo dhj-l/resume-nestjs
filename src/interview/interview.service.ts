@@ -3,7 +3,6 @@ import {
   ConflictException,
   HttpException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -46,6 +45,7 @@ import {
   resolveEndPolicy,
   resolveStageConfig,
 } from './utils/stage-compat';
+import { timeoutCloseFields } from './utils/session-state.utils';
 import { QuestionEngineService } from './services/question-engine.service';
 import { EvaluationService } from './services/evaluation.service';
 import type { AnswerFeedbackResult } from './schemas/interview-question.schema';
@@ -81,6 +81,12 @@ export interface SubmitAnswerResult {
 export class InterviewService {
   private readonly logger = new Logger(InterviewService.name);
 
+  /**
+   * TTS 合成在途去重（single-flight）：同一 (sessionId, round) 的并发
+   * 未命中请求共享一次付费合成，完成后各自拿到同一份结果并写入缓存
+   */
+  private readonly ttsInFlight = new Map<string, Promise<TtsAudio>>();
+
   constructor(
     @InjectModel(InterviewSession.name)
     private readonly sessionModel: Model<InterviewSessionDocument>,
@@ -111,12 +117,12 @@ export class InterviewService {
       throw new BadRequestException(jdCheck.reason);
     }
 
-    const resume = await this.resumeModel
-      .findOne({ _id: dto.resumeId, userId })
-      .lean();
-    if (!resume) {
-      throw new BadRequestException('简历不存在');
-    }
+    // 校招/社招 + 轮次归一化（校招强制 junior，社招拒绝 junior）。
+    // 纯入参校验先于一切 DB 访问：否则非法 levelConfig 会因"已有进行中会话"
+    // 先返回 409，或（缺失时）退化成 500
+    const levelConfig = normalizeLevelConfig(dto.levelConfig);
+
+    const resume = await this.requireOwnedResume(dto.resumeId, userId);
 
     const existing = await this.sessionModel.findOne({
       userId: toObjectId(userId),
@@ -133,8 +139,7 @@ export class InterviewService {
       }
     }
 
-    // 校招/社招 + 轮次归一化（校招强制 junior，社招拒绝 junior）
-    const levelConfig = normalizeLevelConfig(dto.levelConfig);
+    // 校招/社招 + 轮次已在上方归一化，此处只落库
     const now = new Date();
     let reserved: InterviewSessionDocument;
     try {
@@ -172,8 +177,15 @@ export class InterviewService {
         1,
         QuestionTypeEnum.SelfIntro,
       );
-      const filled = await this.sessionModel.findByIdAndUpdate(
-        reserved._id,
+      // 前置条件：仅回填仍是 in_progress 且尚未产生对话的占位会话。
+      // 生成期间占位可能已被并发关闭（超时/取消），或用户已抢答产生消息——
+      // 无条件回填会复活已关闭的会话、覆盖用户已提交的回答
+      const filled = await this.sessionModel.findOneAndUpdate(
+        {
+          _id: reserved._id,
+          status: InterviewStatusEnum.InProgress,
+          'messages.0': { $exists: false },
+        },
         {
           $set: {
             outline,
@@ -185,6 +197,20 @@ export class InterviewService {
         },
         { new: true },
       );
+      if (!filled) {
+        // 回填未命中：会话已被使用或关闭。会话已不在进行中时不能返回给
+        // 客户端当作「创建成功」（前端会渲染一个空对话），明确报冲突让其重试
+        const current = await this.sessionModel.findById(reserved._id).lean();
+        if (!current || current.status !== InterviewStatusEnum.InProgress) {
+          throw new ConflictException('面试会话已结束，请重新发起面试');
+        }
+        // 仍在进行中（用户已抢答产生消息）：返回现状（outline 缺失时
+        // 出题引擎按大纲外自主出题兜底），不覆盖任何已发生的变化
+        this.logger.warn(
+          `占位会话回填未命中（session=${reserved._id}），已跳过大纲回填`,
+        );
+        return current as InterviewSession;
+      }
       return filled as InterviewSession;
     } catch (error) {
       // AI 生成失败：删除占位会话，释放单会话名额供用户立即重试
@@ -285,6 +311,17 @@ export class InterviewService {
     onProgress?: SubmitProgressListener,
   ): Promise<SubmitAnswerResult> {
     const session = await this.requireActiveSession(sessionId, userId);
+
+    // 上一轮已收尾（告别语/反问回应已落库）、仅评价报告生成失败：本次重试只补
+    // 生成报告，不再推进对话——否则同一条回答/反问会二次写入转录并进入报告
+    if (session.pendingReportReason) {
+      return this.retryClosingReport(
+        session,
+        session.pendingReportReason,
+        onProgress,
+      );
+    }
+
     const stageConfig = resolveStageConfig(session.levelConfig);
 
     if (session.phase === InterviewPhaseEnum.Reverse) {
@@ -307,7 +344,10 @@ export class InterviewService {
    */
   async getReverseSuggestions(sessionId: string, userId: string) {
     const session = await this.findOwnedSession(sessionId, userId);
-    const resume = await this.loadResume(session.resumeId.toString(), userId);
+    const resume = await this.loadResumeContext(
+      session.resumeId.toString(),
+      userId,
+    );
     return this.questionEngine.generateReverseSuggestions({
       jobDescription: session.jobDescription,
       resume,
@@ -327,7 +367,7 @@ export class InterviewService {
     onProgress?: SubmitProgressListener,
   ): Promise<SubmitAnswerResult> {
     const currentRound = session.currentRound;
-    await this.appendCandidateMessage(session, dto);
+    const isRetry = await this.appendCandidateMessage(session, dto);
 
     // 时长驱动的结束政策：不足 30 分钟禁止收尾；满 60 分钟强制收尾；
     // 满 30 分钟且超过题数软上限后交给 AI 根据候选人表现判断
@@ -336,17 +376,29 @@ export class InterviewService {
     const askedCount = countInterviewerQuestions(session.messages);
     const endPolicy = resolveEndPolicy(elapsedMs, askedCount);
 
-    const turn = await this.questionEngine.generateTurn({
-      jobDescription: session.jobDescription,
-      resume: await this.loadResume(session.resumeId.toString(), userId),
-      levelConfig: stageConfig,
-      outline: session.outline ?? [],
-      messages: session.messages,
-      askedTopicKeys: session.askedTopicKeys ?? [],
-      elapsedMinutes,
-      askedCount,
-      endPolicy,
-    });
+    // LLM 调用失败时回滚刚追加的回答，避免被放弃的回答以无反馈形态
+    // 混入报告转录（重试检测依赖的遗留消息仅在崩溃等无回滚场景出现）
+    const turn = await this.withAnswerRollback(
+      session,
+      currentRound,
+      dto.content.trim(),
+      isRetry,
+      async () =>
+        this.questionEngine.generateTurn({
+          jobDescription: session.jobDescription,
+          resume: await this.loadResumeContext(
+            session.resumeId.toString(),
+            userId,
+          ),
+          levelConfig: stageConfig,
+          outline: session.outline ?? [],
+          messages: session.messages,
+          askedTopicKeys: session.askedTopicKeys ?? [],
+          elapsedMinutes,
+          askedCount,
+          endPolicy,
+        }),
+    );
 
     await this.writeFeedback(
       session,
@@ -392,37 +444,17 @@ export class InterviewService {
       return this.enterReversePhase(session, closing, turn.feedback);
     }
 
-    const nextRound = currentRound + 1;
     const askedTopicKeys = [...(session.askedTopicKeys ?? [])];
     if (turn.topicKey && !askedTopicKeys.includes(turn.topicKey)) {
       askedTopicKeys.push(turn.topicKey);
     }
 
-    const updated = await this.sessionModel.findOneAndUpdate(
-      {
-        _id: session._id,
-        status: InterviewStatusEnum.InProgress,
-        currentRound,
-      },
-      {
-        $push: {
-          messages: buildInterviewerMessage(
-            turn.question,
-            nextRound,
-            turn.questionType,
-          ),
-        },
-        $set: {
-          currentRound: nextRound,
-          askedTopicKeys,
-          lastActivityAt: new Date(),
-          expiresAt: computeExpiresAt(new Date()),
-        },
-      },
+    const nextRound = await this.appendInterviewerMessage(
+      session,
+      turn.question,
+      turn.questionType,
+      { askedTopicKeys },
     );
-    if (!updated) {
-      throw new ConflictException('面试会话状态已变化，请刷新后重试');
-    }
 
     return {
       finished: false,
@@ -445,16 +477,28 @@ export class InterviewService {
     stageConfig: ReturnType<typeof resolveStageConfig>,
     onProgress?: SubmitProgressListener,
   ): Promise<SubmitAnswerResult> {
-    await this.appendCandidateMessage(session, dto);
+    const currentRound = session.currentRound;
+    const isRetry = await this.appendCandidateMessage(session, dto);
 
     const reverseCount = countReverseQuestions(session.messages);
-    const decision = await this.questionEngine.generateReverseResponse({
-      jobDescription: session.jobDescription,
-      resume: await this.loadResume(session.resumeId.toString(), userId),
-      levelConfig: stageConfig,
-      messages: session.messages,
-      reverseCount,
-    });
+    // 与主体阶段同理：回应生成失败时回滚本次追加的反问
+    const decision = await this.withAnswerRollback(
+      session,
+      currentRound,
+      dto.content.trim(),
+      isRetry,
+      async () =>
+        this.questionEngine.generateReverseResponse({
+          jobDescription: session.jobDescription,
+          resume: await this.loadResumeContext(
+            session.resumeId.toString(),
+            userId,
+          ),
+          levelConfig: stageConfig,
+          messages: session.messages,
+          reverseCount,
+        }),
+    );
 
     // 面试官回应总是落库：即使即将收尾，它也是对话记录（与报告）的一部分
     const nextRound = await this.appendInterviewerMessage(
@@ -501,6 +545,11 @@ export class InterviewService {
   ): Promise<boolean> {
     const currentRound = session.currentRound;
     const trimmedContent = dto.content.trim();
+    // 纯空白与空串同待遇：DTO 已挡一层，这里保证任何调用方都不会把空内容
+    // 写进转录（$push 更新路径不跑 schema 的 required 校验）
+    if (!trimmedContent) {
+      throw new BadRequestException('回答内容不能为空');
+    }
     const lastMessage = session.messages?.[session.messages.length - 1];
     const isRetryOfSameAnswer =
       !!lastMessage &&
@@ -509,96 +558,164 @@ export class InterviewService {
       lastMessage.content === trimmedContent;
 
     if (isRetryOfSameAnswer) {
-      await this.sessionModel.findByIdAndUpdate(session._id, {
-        $set: {
-          lastActivityAt: new Date(),
-          expiresAt: computeExpiresAt(new Date()),
-        },
+      // 活跃窗口刷新同样以 (status, currentRound) 为前置条件：
+      // 会话已被并发收尾时不得续期，也不应继续触发付费 LLM 调用
+      await this.updateSessionGuarded(session, currentRound, {
+        $set: freshActivityFields(),
       });
       return true;
     }
 
-    const appended = await this.sessionModel.findOneAndUpdate(
+    // messages 过滤条件保证同轮次不会出现重复内容的候选人消息：
+    // 并发双击同一答案时后到者更新不生效并 409，这也是 writeFeedback
+    // 能按 (role, round, content) 唯一定位消息的前提
+    const message = buildCandidateMessage(dto, currentRound, session.phase);
+    await this.updateSessionGuarded(
+      session,
+      currentRound,
       {
-        _id: session._id,
-        status: InterviewStatusEnum.InProgress,
-        currentRound,
+        $push: { messages: message },
+        $set: freshActivityFields(),
       },
       {
-        $push: {
-          messages: {
-            role: MessageRoleEnum.Candidate,
-            content: trimmedContent,
-            round: currentRound,
-            kind: MessageKindEnum.Answer,
-            channel: dto.channel ?? MessageChannelEnum.Text,
-            // 反问环节候选人消息标注 reverse，用于计数与报告分组
-            ...(session.phase === InterviewPhaseEnum.Reverse
-              ? { questionType: QuestionTypeEnum.Reverse }
-              : {}),
+        messages: {
+          $not: {
+            $elemMatch: {
+              role: MessageRoleEnum.Candidate,
+              round: currentRound,
+              content: trimmedContent,
+            },
           },
-        },
-        $set: {
-          lastActivityAt: new Date(),
-          expiresAt: computeExpiresAt(new Date()),
         },
       },
     );
-    if (!appended) {
-      throw new ConflictException('面试会话状态已变化，请刷新后重试');
-    }
-    session.messages.push({
-      role: MessageRoleEnum.Candidate,
-      content: trimmedContent,
-      round: currentRound,
-      kind: MessageKindEnum.Answer,
-      channel: dto.channel ?? MessageChannelEnum.Text,
-      ...(session.phase === InterviewPhaseEnum.Reverse
-        ? { questionType: QuestionTypeEnum.Reverse }
-        : {}),
-    } as InterviewMessage);
+    session.messages.push(message as InterviewMessage);
     return false;
+  }
+
+  /**
+   * 回滚本次刚追加的候选人消息（LLM 调用失败时尽力而为）
+   *
+   * 被放弃的回答留在转录里会以"无反馈回答"的形态混入报告；
+   * 回滚失败不阻断异常传播，遗留消息由重试检测兜底。
+   */
+  private async rollbackCandidateMessage(
+    session: InterviewSessionDocument,
+    round: number,
+    content: string,
+  ): Promise<void> {
+    try {
+      await this.sessionModel.updateOne(
+        {
+          _id: session._id,
+          status: InterviewStatusEnum.InProgress,
+          currentRound: round,
+        },
+        {
+          $pull: {
+            messages: {
+              role: MessageRoleEnum.Candidate,
+              round,
+              content,
+              kind: MessageKindEnum.Answer,
+            },
+          },
+        },
+      );
+      const index = session.messages.findLastIndex(
+        (message) =>
+          message.role === MessageRoleEnum.Candidate &&
+          message.round === round &&
+          message.content === content,
+      );
+      if (index >= 0) {
+        session.messages.splice(index, 1);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `候选人消息回滚失败（session=${session._id} round=${round}）`,
+        (error as Error).message,
+      );
+    }
+  }
+
+  /**
+   * 带「失败即回滚」的生成调用（主体阶段与反问阶段共用）
+   *
+   * generate 必须是 thunk：简历上下文查询等前置操作也要落在回滚保护范围内
+   * （与改造前 `.catch()` 挂在整条链上时的语义一致）。重试（isRetry=true，
+   * 消息早已存在）不回滚，只重跑生成。
+   */
+  private async withAnswerRollback<T>(
+    session: InterviewSessionDocument,
+    round: number,
+    content: string,
+    isRetry: boolean,
+    generate: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await generate();
+    } catch (error) {
+      if (!isRetry) {
+        await this.rollbackCandidateMessage(session, round, content);
+      }
+      throw error;
+    }
   }
 
   /**
    * 条件追加面试官消息（轮次前置条件防竞态），写入后同步进内存转录
    * 供后续报告/收尾逻辑使用，返回新一轮次号
+   *
+   * @param extraSet 与消息同批写入的额外字段（如 askedTopicKeys、phase），
+   *                 避免各处再写一份条件更新
    */
   private async appendInterviewerMessage(
     session: InterviewSessionDocument,
     content: string,
     questionType?: QuestionTypeEnum,
+    extraSet: Record<string, unknown> = {},
   ): Promise<number> {
     const currentRound = session.currentRound;
     const nextRound = currentRound + 1;
+    const message = buildInterviewerMessage(content, nextRound, questionType);
+    await this.updateSessionGuarded(session, currentRound, {
+      $push: { messages: message },
+      $set: {
+        ...freshActivityFields(),
+        currentRound: nextRound,
+        ...extraSet,
+      },
+    });
+    session.messages.push(message as InterviewMessage);
+    return nextRound;
+  }
+
+  /**
+   * 轮次前置条件更新（会话写入的唯一入口）
+   *
+   * 读取后若轮次被并发请求推进或会话已被收尾，更新不生效并返回 409，
+   * 杜绝重复出题、askedTopicKeys 混入多主题、把下一题写进已完成会话等竞态后果。
+   */
+  private async updateSessionGuarded(
+    session: InterviewSessionDocument,
+    round: number,
+    update: Record<string, any>,
+    extraFilter: Record<string, any> = {},
+  ): Promise<InterviewSessionDocument> {
     const updated = await this.sessionModel.findOneAndUpdate(
       {
         _id: session._id,
         status: InterviewStatusEnum.InProgress,
-        currentRound,
+        currentRound: round,
+        ...extraFilter,
       },
-      {
-        $push: {
-          messages: buildInterviewerMessage(content, nextRound, questionType),
-        },
-        $set: {
-          currentRound: nextRound,
-          lastActivityAt: new Date(),
-          expiresAt: computeExpiresAt(new Date()),
-        },
-      },
+      update,
     );
     if (!updated) {
       throw new ConflictException('面试会话状态已变化，请刷新后重试');
     }
-    session.messages.push(
-      buildInterviewerMessage(
-        content,
-        nextRound,
-        questionType,
-      ) as InterviewMessage,
-    );
-    return nextRound;
+    return updated as InterviewSessionDocument;
   }
 
   /**
@@ -617,7 +734,12 @@ export class InterviewService {
   ): Promise<void> {
     try {
       await this.sessionModel.updateOne(
-        { _id: session._id },
+        {
+          _id: session._id,
+          // 与其余会话写入同口径：会话被并发收尾或轮次已推进时不再回写
+          status: InterviewStatusEnum.InProgress,
+          currentRound: round,
+        },
         { $set: { 'messages.$[msg].feedback': feedback } },
         {
           arrayFilters: [
@@ -645,32 +767,12 @@ export class InterviewService {
     closingQuestion: string,
     feedback?: AnswerFeedbackResult,
   ): Promise<SubmitAnswerResult> {
-    const nextRound = session.currentRound + 1;
-    const updated = await this.sessionModel.findOneAndUpdate(
-      {
-        _id: session._id,
-        status: InterviewStatusEnum.InProgress,
-        currentRound: session.currentRound,
-      },
-      {
-        $push: {
-          messages: buildInterviewerMessage(
-            closingQuestion,
-            nextRound,
-            QuestionTypeEnum.Reverse,
-          ),
-        },
-        $set: {
-          currentRound: nextRound,
-          phase: InterviewPhaseEnum.Reverse,
-          lastActivityAt: new Date(),
-          expiresAt: computeExpiresAt(new Date()),
-        },
-      },
+    const nextRound = await this.appendInterviewerMessage(
+      session,
+      closingQuestion,
+      QuestionTypeEnum.Reverse,
+      { phase: InterviewPhaseEnum.Reverse },
     );
-    if (!updated) {
-      throw new ConflictException('面试会话状态已变化，请刷新后重试');
-    }
 
     return {
       finished: false,
@@ -689,7 +791,12 @@ export class InterviewService {
     userId: string,
   ): Promise<InterviewSession> {
     const session = await this.requireActiveSession(sessionId, userId);
-    return this.completeAndSave(session, InterviewEndedReasonEnum.UserFinish);
+    // 已收尾待出报告（上次报告生成失败的重试）：沿用原结束原因，
+    // 避免把反问自然收尾的 completed 覆写成 user_finish
+    return this.completeAndSave(
+      session,
+      session.pendingReportReason ?? InterviewEndedReasonEnum.UserFinish,
+    );
   }
 
   /**
@@ -757,29 +864,32 @@ export class InterviewService {
       };
     }
 
-    const handle = await this.ttsService.synthesizeStream(content);
-    const chunks: Buffer[] = [];
-    try {
-      for await (const chunk of handle.iterator) {
-        chunks.push(chunk);
-      }
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      this.logger.error('TTS 流式合成异常', (error as Error).stack);
-      throw new InternalServerErrorException('语音合成失败，请稍后重试');
+    // single-flight：并发未命中只发起一次合成，其余共享同一 Promise
+    const inFlightKey = `${sessionId}:${round}`;
+    const inFlight = this.ttsInFlight.get(inFlightKey);
+    if (inFlight) {
+      return inFlight;
     }
-    const pcm = Buffer.concat(chunks);
-    await this.writeTtsCache(
-      sessionId,
-      round,
-      content,
-      pcm,
-      handle.meta.sampleRate,
-    );
+    const synthesis = this.synthesizeQuestionAudio(sessionId, round, content);
+    this.ttsInFlight.set(inFlightKey, synthesis);
+    try {
+      return await synthesis;
+    } finally {
+      this.ttsInFlight.delete(inFlightKey);
+    }
+  }
+
+  /** 合成指定问题语音并侧路写缓存（供 single-flight 串起的一次合成） */
+  private async synthesizeQuestionAudio(
+    sessionId: string,
+    round: number,
+    content: string,
+  ): Promise<TtsAudio> {
+    // 聚合与错误包装统一走 TtsService.synthesizePcm，业务异常原样透传
+    const { pcm, meta } = await this.ttsService.synthesizePcm(content);
+    await this.writeTtsCache(sessionId, round, content, pcm, meta.sampleRate);
     return {
-      buffer: pcm16ToWav(pcm, handle.meta),
+      buffer: pcm16ToWav(pcm, meta),
       mimeType: 'audio/wav',
     };
   }
@@ -1087,18 +1197,35 @@ export class InterviewService {
     return !!session.expiresAt && session.expiresAt.getTime() <= Date.now();
   }
 
+  /**
+   * 以超时关闭会话（以 status=in_progress 为前置条件）
+   *
+   * 与并发收尾（submitAnswer/finish/cancel）竞争时只有一个赢家：
+   * 未命中说明会话已被并发关闭，不得改写其终态（如已生成的付费报告）；
+   * 此时同步内存状态为 DB 现状，保证调用方返回真实状态。
+   */
   private async closeAsTimeout(session: InterviewSessionDocument) {
-    await this.sessionModel.findByIdAndUpdate(session._id, {
-      $set: {
-        status: InterviewStatusEnum.Cancelled,
-        endedReason: InterviewEndedReasonEnum.Timeout,
-        endedAt: new Date(),
-        lastActivityAt: new Date(),
+    // 终态字段与写库同源（timeoutCloseFields）：一次 Object.assign 同步
+    // status/endedReason/endedAt/lastActivityAt，保证调用方返回的就是库内现状
+    const fields = timeoutCloseFields();
+    const updated = await this.sessionModel.findOneAndUpdate(
+      {
+        _id: session._id,
+        status: InterviewStatusEnum.InProgress,
       },
-    });
-    session.status = InterviewStatusEnum.Cancelled;
-    session.endedReason = InterviewEndedReasonEnum.Timeout;
-    this.logger.warn(`面试会话 ${session._id} 因超时被关闭`);
+      { $set: fields },
+    );
+    if (updated) {
+      Object.assign(session, fields);
+      this.logger.warn(`面试会话 ${session._id} 因超时被关闭`);
+      return;
+    }
+    const current = await this.sessionModel.findById(session._id).lean();
+    if (current) {
+      session.status = current.status;
+      session.endedReason = current.endedReason;
+      session.endedAt = current.endedAt;
+    }
   }
 
   private async completeWithReport(
@@ -1115,6 +1242,35 @@ export class InterviewService {
     };
   }
 
+  /**
+   * 报告生成失败后的重试：对话已收尾，只补生成报告
+   *
+   * 告别语从转录末条面试官消息还原（收尾消息先于标记落库），并重推
+   * closing 事件——报告链路可能再等数分钟，客户端不能全程静默。
+   */
+  private async retryClosingReport(
+    session: InterviewSessionDocument,
+    endedReason: InterviewEndedReasonEnum,
+    onProgress?: SubmitProgressListener,
+  ): Promise<SubmitAnswerResult> {
+    const lastMessage = session.messages?.[session.messages.length - 1];
+    const farewell =
+      lastMessage?.role === MessageRoleEnum.Interviewer
+        ? lastMessage.content
+        : undefined;
+    if (farewell) {
+      onProgress?.({
+        type: 'closing',
+        data: {
+          farewell,
+          round: lastMessage.round,
+          phase: session.phase,
+        } satisfies ClosingEventPayload,
+      });
+    }
+    return this.completeWithReport(session, endedReason, farewell);
+  }
+
   private async completeAndSave(
     session: InterviewSessionDocument,
     endedReason: InterviewEndedReasonEnum,
@@ -1123,6 +1279,26 @@ export class InterviewService {
       0,
       Math.round((Date.now() - session.startedAt.getTime()) / 60_000),
     );
+
+    // 先落「收尾待出报告」标记：报告链路最长可达 8 分钟且可能失败，标记让
+    // 失败后的重试只补生成报告，不重复推进对话轮次（同一条回答/反问被二次
+    // 写入转录会污染报告，也是 answered 内容重复计数的来源）。
+    // 必须连同 expiresAt 一起续期（freshActivityFields）：只刷 lastActivityAt
+    // 的话，会话会在报告生成期间被惰性检查/定时清扫改成 cancelled，随后报告
+    // 落库的 status 前置条件失配 → 已付费生成的报告被丢弃且无法重试
+    const marked = await this.sessionModel.findOneAndUpdate(
+      { _id: session._id, status: InterviewStatusEnum.InProgress },
+      {
+        $set: {
+          pendingReportReason: endedReason,
+          ...freshActivityFields(),
+        },
+      },
+    );
+    if (!marked) {
+      throw new ConflictException('该面试会话已结束');
+    }
+
     const report = await this.evaluationService.generateReport({
       jobDescription: session.jobDescription,
       levelConfig: resolveStageConfig(session.levelConfig),
@@ -1145,6 +1321,8 @@ export class InterviewService {
             report,
             lastActivityAt: new Date(),
           },
+          // 报告已落库，收尾标记清除（保留会让后续重试跳过对话推进）
+          $unset: { pendingReportReason: 1 },
         },
         { new: true },
       )
@@ -1155,12 +1333,39 @@ export class InterviewService {
     return updated as InterviewSession;
   }
 
-  private async loadResume(resumeId: string, userId: string) {
-    const resume = await this.resumeModel
-      .findOne({ _id: resumeId, userId })
-      .lean();
+  /** 简历归属查询（唯一实现：创建会话与面试进行中共用同一查询口径） */
+  private async findOwnedResume(resumeId: string, userId: string) {
+    return this.resumeModel.findOne({ _id: resumeId, userId }).lean();
+  }
+
+  /**
+   * 严格取回简历：不存在即 400「简历不存在」
+   *
+   * 仅创建会话使用——面试尚未开始，必须拦住，否则整场面试都基于空上下文。
+   */
+  private async requireOwnedResume(resumeId: string, userId: string) {
+    const resume = await this.findOwnedResume(resumeId, userId);
     if (!resume) {
       throw new BadRequestException('简历不存在');
+    }
+    return resume;
+  }
+
+  /**
+   * 宽松取回简历上下文（答题回合与反问建议使用）
+   *
+   * 简历可能在面试进行中被用户物理删除（ResumeService.remove 是删除而非标记）。
+   * 照旧抛 400 会让每一次答题都失败、面试卡死到超时（用户只能 /finish 或
+   * /cancel）；此处降级为空简历上下文并留 warn——JD、大纲与对话转录仍在，
+   * 面试可以正常走完（buildTruncatedAnalysisContext 对空对象产出 '{}'，不抛错）。
+   */
+  private async loadResumeContext(resumeId: string, userId: string) {
+    const resume = await this.findOwnedResume(resumeId, userId);
+    if (!resume) {
+      this.logger.warn(
+        `面试所用简历已不存在（resume=${resumeId}），本轮降级为空的简历上下文`,
+      );
+      return {};
     }
     return resume;
   }
@@ -1180,6 +1385,36 @@ function buildInterviewerMessage(
     questionType,
     askedAt: new Date(),
   };
+}
+
+/**
+ * 候选人消息子文档
+ *
+ * 落库的 $push 与内存转录共用同一构造：此前两处各写一份字面量，
+ * 字段增删只会改到一处，导致内存视图（出题与报告的直接输入）与库不一致。
+ */
+function buildCandidateMessage(
+  dto: SubmitAnswerDto,
+  round: number,
+  phase: InterviewPhaseEnum,
+) {
+  return {
+    role: MessageRoleEnum.Candidate,
+    content: dto.content.trim(),
+    round,
+    kind: MessageKindEnum.Answer,
+    channel: dto.channel ?? MessageChannelEnum.Text,
+    // 反问环节候选人消息标注 reverse，用于计数与报告分组
+    ...(phase === InterviewPhaseEnum.Reverse
+      ? { questionType: QuestionTypeEnum.Reverse }
+      : {}),
+  };
+}
+
+/** 活跃窗口刷新字段：每次提问/回答统一续期不活动窗口 */
+function freshActivityFields(): { lastActivityAt: Date; expiresAt: Date } {
+  const now = new Date();
+  return { lastActivityAt: now, expiresAt: computeExpiresAt(now) };
 }
 
 /** 累计已提问的面试官问题数（含自我介绍与反问引导） */

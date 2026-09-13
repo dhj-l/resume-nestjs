@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import OpenAI from 'openai';
+import OpenAI, { APIError } from 'openai';
 import { Stream } from 'openai/streaming';
 import { ChatCompletionChunk } from 'openai/resources/chat/completions';
 import { TTS_STYLE } from './prompt/tts';
@@ -20,6 +20,12 @@ import {
 export interface TtsAudio {
   buffer: Buffer;
   mimeType: string;
+}
+
+/** 聚合式合成的中间结果：原始 PCM16 字节与音频元信息 */
+export interface TtsPcmResult {
+  pcm: Buffer;
+  meta: TtsStreamMeta;
 }
 
 /** 流式 PCM 的音频元信息 */
@@ -112,13 +118,59 @@ export function pcm16ToWav(pcm: Buffer, meta: TtsStreamMeta): Buffer {
 }
 
 /**
+ * 解析 WAV（RIFF/PCM）字节，提取 PCM16 数据与采样率/声道数。
+ *
+ * 供非流式回退通路使用：上游返回完整 wav，需拆出原始 PCM
+ * 才能与流式通路共享缓存/封装逻辑。按 RIFF chunk 遍历而非固定
+ * 44 字节偏移，兼容含 LIST 等附加 chunk 的 wav。
+ */
+export function parseWavPcm(wav: Buffer): {
+  pcm: Buffer;
+  sampleRate: number;
+  channels: number;
+} {
+  if (
+    !wav ||
+    wav.length < 44 ||
+    wav.toString('ascii', 0, 4) !== 'RIFF' ||
+    wav.toString('ascii', 8, 12) !== 'WAVE'
+  ) {
+    throw new BadGatewayException('语音合成失败：返回的音频数据无法解析');
+  }
+  let sampleRate = 0;
+  let channels = 0;
+  let pcm: Buffer | null = null;
+  let offset = 12;
+  while (offset + 8 <= wav.length) {
+    const chunkId = wav.toString('ascii', offset, offset + 4);
+    const chunkSize = wav.readUInt32LE(offset + 4);
+    if (chunkId === 'fmt ') {
+      channels = wav.readUInt16LE(offset + 10);
+      sampleRate = wav.readUInt32LE(offset + 12);
+    } else if (chunkId === 'data') {
+      pcm = wav.subarray(
+        offset + 8,
+        Math.min(offset + 8 + chunkSize, wav.length),
+      );
+      break;
+    }
+    // RIFF chunk 按偶数字节对齐
+    offset += 8 + chunkSize + (chunkSize % 2);
+  }
+  if (!pcm?.length || !sampleRate || !channels) {
+    throw new BadGatewayException('语音合成失败：返回的音频数据无法解析');
+  }
+  return { pcm, sampleRate, channels };
+}
+
+/**
  * 语音合成服务（小米 MiMo TTS，OpenAI 兼容接口）
  *
  * 文档：https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/speech-synthesis-v2.5
  * 待合成文本放在 role=assistant 消息中，风格指令放在 role=user 消息中（可选），
  * audio 参数指定音色与格式。`synthesizeStream` 以 stream: true + pcm16 调用上游，
- * 逐块产出解码后的 PCM16 字节；`synthesize` 基于流式路径聚合后本地封装 wav，
- * 对外行为与旧的非流式调用保持一致。
+ * 逐块产出解码后的 PCM16 字节；旧模型返回 400 时自动回退非流式 wav 通路。
+ * `synthesize` 聚合后本地封装 wav，对外行为与旧的非流式调用保持一致。
  */
 @Injectable()
 export class TtsService {
@@ -128,11 +180,25 @@ export class TtsService {
   constructor(private readonly config: ConfigService) {}
 
   /**
-   * 将文本合成为 wav 音频（内部走流式通路，聚合后封装 WAV）
+   * 将文本合成为 wav 音频（内部走流式通路聚合，旧模型自动回退非流式）
    * @param text 待合成的纯文本
    * @throws BadRequestException 文本非法或 TTS 远端调用失败
    */
   async synthesize(text: string): Promise<TtsAudio> {
+    const { pcm, meta } = await this.synthesizePcm(text);
+    return {
+      buffer: pcm16ToWav(pcm, meta),
+      mimeType: 'audio/wav',
+    };
+  }
+
+  /**
+   * 将文本合成为原始 PCM16 并聚合返回（流式/非流式通路的公共聚合点）
+   *
+   * 调用方（interview 模块缓存侧路、wav 封装）统一经由本方法消费，
+   * 聚合与错误包装逻辑单点，不再各自复刻 for-await 循环。
+   */
+  async synthesizePcm(text: string): Promise<TtsPcmResult> {
     const handle = await this.synthesizeStream(text);
     const chunks: Buffer[] = [];
     try {
@@ -142,10 +208,7 @@ export class TtsService {
     } catch (error) {
       throw this.wrapTtsError(error);
     }
-    return {
-      buffer: pcm16ToWav(Buffer.concat(chunks), handle.meta),
-      mimeType: 'audio/wav',
-    };
+    return { pcm: Buffer.concat(chunks), meta: handle.meta };
   }
 
   /**
@@ -190,12 +253,69 @@ export class TtsService {
         { signal: controller.signal },
       );
     } catch (error) {
+      // 旧模型（mimo-v2.5-tts-voicedesign，63f8493 时代的默认值）不支持
+      // pcm16 + stream:true，上游返回 400 Param Incorrect：存量部署的
+      // MIMO_TTS_MODEL 仍是旧模型时，回退到非流式通路而不是全部硬失败
+      if (error instanceof APIError && error.status === 400) {
+        return this.synthesizeViaNonStream(trimmed, style, controller);
+      }
       throw this.wrapTtsError(error);
     }
 
     return {
       meta,
       iterator: this.iterateAudioChunks(stream, controller),
+      abort: () => controller.abort(),
+    };
+  }
+
+  /**
+   * 非流式回退通路（wav）：与 63f8493 之前的调用形状一致——
+   * 不带 stream、audio.format=wav，响应为完整 base64 wav。
+   * 解析 wav 头取出 PCM 与真实采样率后包装为 TtsStream。
+   */
+  private async synthesizeViaNonStream(
+    text: string,
+    style: string | null,
+    controller: AbortController,
+  ): Promise<TtsStream> {
+    let response: any;
+    try {
+      response = await this.getClient().chat.completions.create(
+        {
+          model: this.config.get('MIMO_TTS_MODEL', DEFAULT_TTS_MODEL),
+          messages: [
+            ...(style ? [{ role: 'user' as const, content: style }] : []),
+            { role: 'assistant' as const, content: text },
+          ],
+          audio: {
+            format: 'wav',
+            voice: this.config.get('MIMO_TTS_VOICE', DEFAULT_TTS_VOICE),
+          },
+        },
+        { signal: controller.signal },
+      );
+    } catch (error) {
+      // 回退也失败（参数确实非法等）：以上游错误为准
+      throw this.wrapTtsError(error);
+    }
+
+    const base64Wav =
+      response?.choices?.[0]?.message?.audio?.data ??
+      response?.choices?.[0]?.delta?.audio?.data;
+    if (typeof base64Wav !== 'string' || !base64Wav) {
+      throw new BadRequestException('语音合成失败：响应中没有音频数据');
+    }
+    const { pcm, sampleRate, channels } = parseWavPcm(
+      Buffer.from(base64Wav, 'base64'),
+    );
+    const meta: TtsStreamMeta = { sampleRate, channels };
+    return {
+      meta,
+      // 请求已完成，迭代器一次性产出全部 PCM；abort 幂等无副作用
+      iterator: (async function* () {
+        yield pcm;
+      })(),
       abort: () => controller.abort(),
     };
   }

@@ -34,6 +34,8 @@ describe('InterviewTimeoutScheduler - 过期会话清扫', () => {
     const closed = await scheduler.sweepExpiredSessions();
 
     expect(closed).toBe(2);
+    // 终态字段与 InterviewService.closeAsTimeout 同源（timeoutCloseFields）：
+    // 两条关闭路径必须写出完全相同的文档状态
     expect(mockSessionModel.updateMany).toHaveBeenCalledWith(
       {
         status: 'in_progress',
@@ -44,6 +46,7 @@ describe('InterviewTimeoutScheduler - 过期会话清扫', () => {
           status: 'cancelled',
           endedReason: 'timeout',
           endedAt: expect.any(Date),
+          lastActivityAt: expect.any(Date),
         },
       },
     );

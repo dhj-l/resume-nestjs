@@ -175,6 +175,18 @@ describe('SttService - MiMo 语音识别（流式）', () => {
       );
     });
 
+    it('should accept the audio/x-m4a variant (Safari recordings)', async () => {
+      // 错误提示与文档均承诺支持 m4a：x-m4a 变体不得被白名单误拒
+      mockCreate.mockResolvedValue(makeStream([deltaTextChunk('你好')]));
+
+      await expect(
+        service.transcribeStream({
+          buffer: Buffer.from('x'),
+          mimeType: 'audio/x-m4a',
+        }),
+      ).resolves.toBeDefined();
+    });
+
     it('should reject an unsupported mime type without calling the API', async () => {
       await expect(
         service.transcribeStream({

@@ -62,6 +62,16 @@ describe('CreateInterviewSessionDto', () => {
     expect(errors.some((e) => e.property === 'levelConfig')).toBe(true);
   });
 
+  it('should reject a missing levelConfig', async () => {
+    // class-validator 的 ValidateNested 对 undefined 直接跳过，
+    // 必须由 @IsDefined 拦住，否则会穿透到 service 变成 500
+    const payload = buildValidDto();
+    delete payload.levelConfig;
+    const dto = plainToInstance(CreateInterviewSessionDto, payload);
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'levelConfig')).toBe(true);
+  });
+
   it('should reject an invalid mode enum value', async () => {
     const payload = buildValidDto();
     payload.levelConfig.mode = 'internship';
@@ -132,5 +142,16 @@ describe('SubmitAnswerDto', () => {
       'channel',
       'content',
     ]);
+  });
+
+  it('should trim the answer content and reject a whitespace-only answer', async () => {
+    // 纯空白串须与空串同待遇：否则会以 trim 后的空串落库（$push 不跑 required 校验）
+    const blank = plainToInstance(SubmitAnswerDto, { content: '   ' });
+    const blankErrors = await validate(blank);
+    expect(blankErrors.some((e) => e.property === 'content')).toBe(true);
+
+    const padded = plainToInstance(SubmitAnswerDto, { content: ' 我的回答 ' });
+    expect(await validate(padded)).toHaveLength(0);
+    expect(padded.content).toBe('我的回答');
   });
 });

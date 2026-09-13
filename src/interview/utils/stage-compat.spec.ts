@@ -120,6 +120,13 @@ describe('stage-compat - 面试级别配置兼容与结束政策', () => {
         normalizeLevelConfig({ mode: InterviewModeEnum.Campus }),
       ).toThrow('mode 与 stage 为必填项');
     });
+
+    it('整个 levelConfig 缺失也抛出 400 而非 TypeError', () => {
+      // DTO 的 @IsDefined 是第一道防线，这里是任何内部调用路径的兜底
+      expect(() =>
+        normalizeLevelConfig(undefined as unknown as LevelConfig),
+      ).toThrow('mode 与 stage 为必填项');
+    });
   });
 
   describe('resolveEndPolicy - 时长驱动的结束政策', () => {

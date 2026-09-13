@@ -55,6 +55,12 @@ Hard constraints:
 
 Use Jest + ts-jest with `@nestjs/testing`; inject mocks via `useValue`. Unit tests (`*.spec.ts`) live beside their source files (Jest `rootDir` is `src/`); E2E tests (`*.e2e-spec.ts`) live in `test/`. The Jest `moduleNameMapper` maps `src/...` imports to the real files, so specs may import via `src/...`. Name tests by behavior, e.g. `should reject an invalid resume payload`. Run lint and tests before pushing; run `test:cov` for PRs touching core services.
 
+Work test-first (TDD). Write the spec that expresses the expected behavior and watch it fail for the right reason before touching the implementation, then write the minimal code to pass, then refactor with the spec as the safety net.
+
+- New behavior (feature, bug fix, behavior change): red → green → refactor on the source module's spec.
+- Behavior-preserving refactor (deduplication, extraction, renaming): there is no new behavior to drive out, so pin the existing behavior first — add characterization tests that assert the current outputs (rendered prompts, request payloads, emitted events) and confirm they pass against the old implementation before refactoring.
+- AI orchestration: prompt content and model output are not deterministic, so assert the *inputs* you hand to the chain (rendered prompt text, variables, parameters) and the *decisions* you take on its structured output — never assert the model's own generated text.
+
 ## Commit & Pull Request Guidelines
 
 Git history follows Conventional Commits: `feat:`, `fix:`, `refactor:`, `style:`, `chore:`, with an optional scope such as `feat(resume-ai):`. Summaries may be Chinese or English but must describe the change. Use prefixed branch names (`fix/`, `feature/`, `deploy/`); the default branch is `main`.

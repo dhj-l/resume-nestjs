@@ -236,6 +236,54 @@ describe('TtsService - MiMo 语音合成（流式）', () => {
       ).rejects.toThrow('语音合成失败');
     });
 
+    it('should fall back to the non-stream wav path when the model rejects pcm16 streaming', async () => {
+      // 旧模型（mimo-v2.5-tts-voicedesign）不支持 pcm16 + stream:true，
+      // 上游返回 400 Param Incorrect：存量部署配置旧模型时应回退
+      // 非流式通路而不是全部硬失败
+      const legacyWav = pcm16ToWav(Buffer.from('legacy-pcm'), {
+        sampleRate: 16000,
+        channels: 1,
+      });
+      mockCreate
+        .mockRejectedValueOnce(
+          new APIError(400, 'Param Incorrect', undefined, undefined),
+        )
+        .mockResolvedValueOnce({
+          choices: [
+            { message: { audio: { data: legacyWav.toString('base64') } } },
+          ],
+        });
+
+      const handle = await service.synthesizeStream('你好。');
+      const chunks: Buffer[] = [];
+      for await (const chunk of handle.iterator) {
+        chunks.push(chunk);
+      }
+
+      expect(Buffer.concat(chunks).toString()).toBe('legacy-pcm');
+      // 回退请求为非流式（无 stream 键），audio.format 退回 wav
+      const fallbackBody = mockCreate.mock.calls[1][0];
+      expect('stream' in fallbackBody).toBe(false);
+      expect(fallbackBody.audio).toEqual({ format: 'wav', voice: '冰糖' });
+      // 采样率/声道取自 wav 头，而非环境变量默认值
+      expect(handle.meta).toEqual({ sampleRate: 16000, channels: 1 });
+    });
+
+    it('should surface the upstream error when the non-stream fallback also fails', async () => {
+      mockCreate
+        .mockRejectedValueOnce(
+          new APIError(400, 'Param Incorrect', undefined, undefined),
+        )
+        .mockRejectedValueOnce(
+          new APIError(400, 'voice not found', undefined, undefined),
+        );
+
+      await expect(service.synthesizeStream('你好。')).rejects.toThrow(
+        '语音合成失败',
+      );
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+    });
+
     it('should fail with a business error when the upstream stalls mid-stream', async () => {
       // OpenAI SDK 对 stream:true 跳过 timeout 竞态：上游停发数据时
       // 消费循环必须靠自身的整体 deadline 兜底，而不是永久挂起
