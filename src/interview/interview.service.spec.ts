@@ -17,6 +17,7 @@ import {
   INACTIVITY_TIMEOUT_MS,
   InterviewModeEnum,
   InterviewStageEnum,
+  MAIN_PHASE_HARD_STOP_MS,
   MAX_REVERSE_QUESTIONS,
 } from './constants/level.constants';
 import { InterviewStatusEnum } from './constants/level.constants';
@@ -837,6 +838,143 @@ describe('InterviewService - 模拟面试编排', () => {
       expect(result.finished).toBe(false);
       expect(result.phase).toBe('main');
       expect(mockEvaluation.generateReport).not.toHaveBeenCalled();
+    });
+
+    it('should keep interviewing when the time policy allows ending but outline topics remain', async () => {
+      // 核心需求：15 个大纲主题必须问完才进反问环节。此处 AI 建议收尾、
+      // 时长政策也已是 can_end（47 分钟 / 23 题），但仍有 2 个主题未覆盖
+      const session = buildActiveSession({
+        currentRound: 24,
+        outline: [
+          { key: 'topic-a', title: '自我介绍', questionType: 'self_intro' },
+          { key: 'topic-b', title: '项目深挖', questionType: 'project' },
+          {
+            key: 'topic-c',
+            title: 'TCP 三次握手',
+            questionType: 'fundamentals',
+          },
+        ],
+        askedTopicKeys: ['self_intro'],
+        startedAt: new Date(Date.now() - 47 * 60_000),
+        messages: buildAskedQuestions(23),
+      });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(resumeDoc),
+      });
+      mockEngine.generateTurn.mockResolvedValue({
+        ...validTurn,
+        question: '今天聊得差不多了，你有什么想问我的吗？',
+        questionType: 'reverse',
+        shouldEndMainPhase: true,
+      });
+
+      const result = await service.submitAnswer(session._id, answerDto, userId);
+
+      expect(result.finished).toBe(false);
+      expect(result.phase).toBe('main');
+      expect(mockEvaluation.generateReport).not.toHaveBeenCalled();
+      // 未切换 phase：仍在主体阶段继续出题
+      const [, update] = mockSessionModel.findOneAndUpdate.mock.calls.at(-1);
+      expect(update.$set.phase).toBeUndefined();
+      expect(update.$set.currentRound).toBe(25);
+    });
+
+    it('should not end at the 60-minute cap while outline topics remain', async () => {
+      const session = buildActiveSession({
+        currentRound: 24,
+        outline: [
+          { key: 'topic-a', title: '自我介绍', questionType: 'self_intro' },
+          { key: 'topic-b', title: '项目深挖', questionType: 'project' },
+          {
+            key: 'topic-c',
+            title: 'TCP 三次握手',
+            questionType: 'fundamentals',
+          },
+        ],
+        askedTopicKeys: ['topic-a', 'topic-b'],
+        startedAt: new Date(Date.now() - 61 * 60_000),
+        messages: buildAskedQuestions(23),
+      });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(resumeDoc),
+      });
+      // must_end 下模型按覆盖前置条件继续推进最后一个主题
+      mockEngine.generateTurn.mockResolvedValue({
+        ...validTurn,
+        topicKey: 'topic-c',
+        question: '说说 TCP 三次握手的必要性？',
+        questionType: 'fundamentals',
+      });
+
+      const result = await service.submitAnswer(session._id, answerDto, userId);
+
+      expect(result.finished).toBe(false);
+      expect(result.phase).toBe('main');
+      expect(result.nextQuestion).toBe('说说 TCP 三次握手的必要性？');
+      const [, update] = mockSessionModel.findOneAndUpdate.mock.calls.at(-1);
+      expect(update.$set.phase).toBeUndefined();
+    });
+
+    it('should enter the reverse phase at the hard stop even if topics remain', async () => {
+      // 兜底：主题因模型标注异常始终补不齐时，主体阶段也必须能结束
+      const session = buildActiveSession({
+        currentRound: 40,
+        outline: [
+          { key: 'topic-a', title: '自我介绍', questionType: 'self_intro' },
+          { key: 'topic-b', title: '项目深挖', questionType: 'project' },
+        ],
+        askedTopicKeys: ['topic-a'],
+        startedAt: new Date(Date.now() - (MAIN_PHASE_HARD_STOP_MS + 60_000)),
+        messages: buildAskedQuestions(39),
+      });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(resumeDoc),
+      });
+      mockEngine.generateTurn.mockResolvedValue(validTurn);
+
+      const result = await service.submitAnswer(session._id, answerDto, userId);
+
+      expect(result.phase).toBe('reverse');
+      // 模型未输出收尾语时用本地模板兜底
+      expect(result.nextQuestion).toContain('你有什么想问我的吗');
+      const [, update] = mockSessionModel.findOneAndUpdate.mock.calls.at(-1);
+      expect(update.$set.phase).toBe('reverse');
+    });
+
+    it('should enter the reverse phase when every outline topic is covered', async () => {
+      const session = buildActiveSession({
+        currentRound: 24,
+        outline: [
+          { key: 'topic-a', title: '自我介绍', questionType: 'self_intro' },
+          { key: 'topic-b', title: '项目深挖', questionType: 'project' },
+        ],
+        askedTopicKeys: ['topic-a', 'topic-b'],
+        startedAt: new Date(Date.now() - 47 * 60_000),
+        messages: buildAskedQuestions(23),
+      });
+      mockSessionModel.findOne.mockResolvedValue(session);
+      mockConditionalUpdateOk();
+      mockResumeModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue(resumeDoc),
+      });
+      const closingQuestion = '今天聊得很好，你有什么想问我的吗？';
+      mockEngine.generateTurn.mockResolvedValue({
+        ...validTurn,
+        question: closingQuestion,
+        questionType: 'reverse',
+        shouldEndMainPhase: true,
+      });
+
+      const result = await service.submitAnswer(session._id, answerDto, userId);
+
+      expect(result.phase).toBe('reverse');
+      expect(result.nextQuestion).toBe(closingQuestion);
     });
 
     it('should enter the reverse phase when AI decides to end past the soft cap', async () => {

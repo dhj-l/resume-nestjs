@@ -106,7 +106,13 @@ export const EXPERIENCE_LEVEL_PROMPTS: Record<ExperienceLevelEnum, string> = {
 /** 主体考察阶段最短时长：不足该时长时禁止进入结束环节（保证面试时长下限） */
 export const MIN_MAIN_DURATION_MS = 30 * 60 * 1000;
 
-/** 主体考察阶段最长时长：达到后服务端强制进入结束环节（引导反问收尾） */
+/**
+ * 主体考察阶段最长时长：达到后进入强制收尾通道（引导反问收尾）
+ *
+ * 注意：是否真的收尾还受覆盖前置条件约束——仍有大纲主题未考察时，
+ * 服务端会顺延到 MAIN_PHASE_HARD_STOP_MS 之前把主题问完（见
+ * shouldEnterReversePhase 与 MAIN_PHASE_HARD_STOP_MS）。
+ */
 export const MAX_MAIN_DURATION_MS = 60 * 60 * 1000;
 
 /**
@@ -114,6 +120,28 @@ export const MAX_MAIN_DURATION_MS = 60 * 60 * 1000;
  * AI 才可以根据候选人回答判断是否进入结束环节
  */
 export const SOFT_MAX_MAIN_QUESTIONS = 15;
+
+/**
+ * 主体阶段硬停止（毫秒）：大纲覆盖前置条件的兜底
+ *
+ * 进入反问环节以「大纲主题全部覆盖」为前提，因此满 MAX_MAIN_DURATION_MS
+ * 后若仍有未覆盖主题，服务端会继续出题（此时不再追问、不再自主出题）
+ * 直到主题问完。但模型 topicKey 标注异常等极端情况下主题可能永远补不齐，
+ * 故自最长时长起再顺延 30 分钟作为硬停止：到点无条件收尾，
+ * 保证主体阶段一定能结束（不会因覆盖条件卡死）。
+ */
+export const MAIN_PHASE_HARD_STOP_MS = MAX_MAIN_DURATION_MS + 30 * 60 * 1000;
+
+/**
+ * 项目深挖主题配额基准：大纲规划时按经历时间向各经历分配
+ * 深挖主题配额的总数参考值。
+ *
+ * 依据：大纲主题上限 15 × 一/二面深挖占比约 70% ≈ 10。配额以「约数」
+ * 注入提示词，各轮次配比不同（三面约 60%）时由模型按比例缩放，
+ * 故不按轮次细分。分配规则与收集范围（随面试模式变化）见
+ * buildProjectDeepDiveQuota。
+ */
+export const DEEP_DIVE_QUOTA_BASE = 10;
 
 /** 反问环节候选人提问数量上限 */
 export const MAX_REVERSE_QUESTIONS = 3;

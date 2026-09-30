@@ -24,6 +24,7 @@ import puppeteer from 'puppeteer';
 import { existsSync } from 'fs';
 import { GetResumeDto } from './dto/get-resume.dto';
 import { AdminQueryResumeDto } from './dto/admin-query-resume.dto';
+import { buildModuleSortUpdate } from './utils/module-sort.util';
 
 type SortableItem = {
   globalSort?: number;
@@ -217,6 +218,43 @@ export class ResumeService implements OnModuleDestroy {
     return result;
   }
 
+  /**
+   * 将文档转为普通对象（兼容 lean 结果与 mongoose 文档）
+   */
+  private toPlainResume(resume: any): Record<string, any> {
+    return typeof resume?.toObject === 'function'
+      ? resume.toObject()
+      : { ...(resume ?? {}) };
+  }
+
+  /**
+   * 模块排序冲突兜底修复
+   *
+   * 客户端/AI 提交的模块 globalSort 可能重复或缺失（落库被 schema default
+   * 补成 0），而前端"交换式排序"对相等值是空操作，会导致模块无法排序。
+   * 仅在检出冲突时按相对顺序重编为唯一值（1..n），正常唯一时不做任何写回。
+   */
+  private async repairModuleSortIfConflicted(
+    resume: ResumeDocument,
+  ): Promise<ResumeDocument> {
+    const repair = buildModuleSortUpdate(this.toPlainResume(resume), {
+      onlyOnConflict: true,
+    });
+    if (!Object.keys(repair).length) {
+      return resume;
+    }
+
+    this.logger.warn(
+      `简历 ${resume._id} 模块排序字段存在重复或缺失，已按相对顺序自动修复`,
+    );
+    const repaired = await this.resumeModel.findByIdAndUpdate(
+      resume._id,
+      { $set: repair },
+      { new: true },
+    );
+    return repaired ?? resume;
+  }
+
   private getContent(html: string, css: string) {
     // 前端传来的 css 已自包含全部所需样式（构建时编译的 Tailwind 产物）。
     // 禁止在此注入 @tailwindcss/browser 等运行时：v4 运行时会注册
@@ -394,7 +432,7 @@ export class ResumeService implements OnModuleDestroy {
       this.logger.log(
         `用户 ${userId} 基于模板 ${templateId} 成功创建简历: ${newResume._id.toString()}`,
       );
-      return newResume;
+      return await this.repairModuleSortIfConflicted(newResume);
     }
 
     // 创建空白简历
@@ -412,7 +450,7 @@ export class ResumeService implements OnModuleDestroy {
     this.logger.log(
       `用户 ${userId} 成功创建空白简历: ${newResume._id.toString()}`,
     );
-    return newResume;
+    return await this.repairModuleSortIfConflicted(newResume);
   }
   /**
    * 查找所有模板简历
@@ -532,10 +570,21 @@ export class ResumeService implements OnModuleDestroy {
 
     const enrichedDto = this.enrichWithSortFields(updateResumeDto);
 
+    // 合并"库中现值 + 本次提交值"后仅在检出模块级排序冲突时兜底重编号：
+    // 前端正常换序写回的是唯一值，此分支不会触发，保证幂等
+    const merged = { ...this.toPlainResume(resume), ...enrichedDto };
+    const sortRepair = buildModuleSortUpdate(merged, { onlyOnConflict: true });
+    if (Object.keys(sortRepair).length) {
+      this.logger.warn(
+        `用户 ${userId} 更新的简历 ${id} 模块排序字段存在重复或缺失，已按相对顺序自动修复`,
+      );
+    }
+
     const updatedResume = await this.resumeModel.findByIdAndUpdate(
       id,
       {
         ...enrichedDto,
+        ...sortRepair,
         updatedAt: new Date(),
       },
       {

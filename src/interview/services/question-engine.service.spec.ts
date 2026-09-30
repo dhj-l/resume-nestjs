@@ -7,8 +7,10 @@ import {
   InterviewModeEnum,
   InterviewStageEnum,
   MIN_MAIN_DURATION_MS,
+  QuestionTypeEnum,
   SOFT_MAX_MAIN_QUESTIONS,
 } from '../constants/level.constants';
+import type { InterviewOutlineTopic } from '../schemas/interview-outline.schema';
 import type { InterviewMessage } from '../entities/interview-session.entity';
 import {
   MessageKindEnum,
@@ -31,21 +33,21 @@ describe('QuestionEngineService - 出题引擎', () => {
     experienceLevel: ExperienceLevelEnum.Mid,
   };
 
-  const outline = [
+  const outline: InterviewOutlineTopic[] = [
     {
       key: 'self_intro',
       title: '自我介绍',
-      questionType: 'self_intro',
+      questionType: QuestionTypeEnum.SelfIntro,
     },
     {
       key: 'order_system_refactor',
       title: '订单系统重构',
-      questionType: 'project',
+      questionType: QuestionTypeEnum.Project,
     },
     {
       key: 'tcp_handshake',
       title: 'TCP 三次握手',
-      questionType: 'fundamentals',
+      questionType: QuestionTypeEnum.Fundamentals,
     },
   ];
 
@@ -109,6 +111,113 @@ describe('QuestionEngineService - 出题引擎', () => {
       expect(result[0].questionType).toBe('self_intro');
       expect(result[1].questionType).toBe('project');
       expect(result[2].questionType).toBe('fundamentals');
+    });
+
+    /** 渲染大纲链并捕获最终提示词文本（断言注入变量而非模型输出） */
+    const captureOutlinePrompt = async (input: {
+      jobDescription: string;
+      resume: Record<string, any>;
+      levelConfig: typeof levelConfig;
+    }) => {
+      let capturedPrompt = '';
+      mockAiService.generateInterviewOutline.mockImplementation(() =>
+        RunnableLambda.from(async (promptValue: { toString(): string }) => {
+          capturedPrompt = String(promptValue);
+          return JSON.stringify({
+            topics: [
+              { key: 'intro', title: '开场', questionType: 'self_intro' },
+            ],
+          });
+        }),
+      );
+      mockAiService.createRobustStructuredParser.mockReturnValue(
+        RunnableLambda.from(async (raw: any) =>
+          typeof raw === 'string' ? JSON.parse(raw) : raw,
+        ),
+      );
+
+      await service.generateOutline(input);
+      return capturedPrompt;
+    };
+
+    it('should inject the project deep-dive quota into the outline prompt', async () => {
+      const capturedPrompt = await captureOutlinePrompt({
+        jobDescription: '负责后端服务开发',
+        // 校招配额范围 = 项目 + 实习
+        resume: {
+          projectExperience: [
+            { title: '订单中台', startTime: '2024-06', endTime: '至今' },
+          ],
+          internshipExperience: [
+            {
+              companyName: '字节跳动',
+              position: '后端实习',
+              startTime: '2023-01',
+              endTime: '2023-06',
+            },
+          ],
+        },
+        levelConfig: { ...levelConfig, mode: InterviewModeEnum.Campus },
+      });
+
+      expect(capturedPrompt).toContain('项目深挖配额');
+      expect(capturedPrompt).toContain('「订单中台」（2024-06 至今）');
+      expect(capturedPrompt).toContain('「字节跳动·后端实习」');
+    });
+
+    it('should scope the quota to work and project experience in experienced mode', async () => {
+      const capturedPrompt = await captureOutlinePrompt({
+        jobDescription: '负责后端服务开发',
+        // 社招配额范围 = 工作 + 项目，实习不参与分配
+        resume: {
+          workExperience: [
+            {
+              companyName: '阿里云',
+              position: '后端工程师',
+              workTime: '2022-03',
+              dismissalTime: '至今',
+            },
+          ],
+          projectExperience: [
+            { title: '订单中台', startTime: '2024-06', endTime: '2025-06' },
+          ],
+          internshipExperience: [
+            {
+              companyName: '字节跳动',
+              position: '后端实习',
+              startTime: '2023-01',
+              endTime: '2023-06',
+            },
+          ],
+        },
+        levelConfig,
+      });
+
+      expect(capturedPrompt).toContain('「阿里云·后端工程师」（2022-03 至今）');
+      expect(capturedPrompt).toContain('「订单中台」（2024-06 ~ 2025-06）');
+      // 简历正文（resume_content）仍含实习原文，只校验配额清单段落
+      const quotaSection = capturedPrompt.split('## 项目深挖配额')[1] ?? '';
+      expect(quotaSection).not.toContain('字节跳动');
+    });
+
+    it('should inject a fallback note when the resume has no projects', async () => {
+      const capturedPrompt = await captureOutlinePrompt({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig: { ...levelConfig, mode: InterviewModeEnum.Campus },
+      });
+
+      expect(capturedPrompt).toContain('候选人未提供可解析的项目/实习经历');
+    });
+
+    it('should inject an experienced fallback note mentioning work experience', async () => {
+      const capturedPrompt = await captureOutlinePrompt({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+      });
+
+      expect(capturedPrompt).toContain('候选人未提供可解析的项目/工作经历');
     });
 
     it('should retry when AI returns empty topics then succeed', async () => {
@@ -230,7 +339,8 @@ describe('QuestionEngineService - 出题引擎', () => {
         levelConfig,
         outline,
         messages,
-        askedTopicKeys: [],
+        // 大纲主题已全部覆盖：结束政策按原时长口径生效
+        askedTopicKeys: outline.map((topic) => topic.key),
         elapsedMinutes: 35,
         askedCount: 16,
         endPolicy: 'can_end',
@@ -239,6 +349,57 @@ describe('QuestionEngineService - 出题引擎', () => {
       expect(capturedPrompt).toContain('已进行 35 分钟');
       expect(capturedPrompt).toContain('已提问 16 个问题');
       expect(capturedPrompt).toContain('可以结束');
+    });
+
+    it('should forbid ending while outline topics remain, whatever the policy', async () => {
+      // 核心需求：主题没问完就收尾会让 15 个模块只考察 12 个，
+      // 提示词必须在「可以结束」「必须结束」两种政策下都禁止收尾
+      const remainingCases = [
+        {
+          endPolicy: 'can_end' as const,
+          elapsedMinutes: 47,
+          askedCount: 24,
+          expected: ['禁止结束', '仍有 2 个大纲主题尚未覆盖', '必须继续出题'],
+        },
+        {
+          endPolicy: 'must_end' as const,
+          elapsedMinutes: 61,
+          askedCount: 24,
+          expected: [
+            '必须收尾，但大纲覆盖未完成',
+            '仍有 2 个主题尚未覆盖',
+            '逐个把剩余主题问完',
+          ],
+        },
+      ];
+
+      for (const testCase of remainingCases) {
+        let capturedPrompt = '';
+        setupModelPromptCapture(
+          mockAiService.generateInterviewQuestion,
+          (p) => {
+            capturedPrompt = p;
+          },
+          validTurn,
+        );
+
+        await service.generateTurn({
+          jobDescription: '负责后端服务开发',
+          resume: {},
+          levelConfig,
+          outline,
+          messages,
+          // 还剩 order_system_refactor 与 tcp_handshake 未覆盖
+          askedTopicKeys: ['self_intro'],
+          elapsedMinutes: testCase.elapsedMinutes,
+          askedCount: testCase.askedCount,
+          endPolicy: testCase.endPolicy,
+        });
+
+        for (const expected of testCase.expected) {
+          expect(capturedPrompt).toContain(expected);
+        }
+      }
     });
 
     it('should derive the cannot_end thresholds from the shared constants', async () => {
@@ -276,7 +437,7 @@ describe('QuestionEngineService - 出题引擎', () => {
       expect(capturedPrompt).toContain('禁止结束');
     });
 
-    it('should describe the must_end policy as mandatory transition', async () => {
+    it('should describe the must_end policy as mandatory transition once covered', async () => {
       let capturedPrompt = '';
       mockAiService.generateInterviewQuestion.mockImplementation(() =>
         RunnableLambda.from(async (promptValue: { toString(): string }) => {
@@ -295,19 +456,115 @@ describe('QuestionEngineService - 出题引擎', () => {
         ),
       );
 
-      await service.generateTurn({
+      const result = await service.generateTurn({
         jobDescription: '负责后端服务开发',
         resume: {},
         levelConfig,
         outline,
         messages,
-        askedTopicKeys: [],
+        askedTopicKeys: outline.map((topic) => topic.key),
         elapsedMinutes: 62,
         askedCount: 18,
         endPolicy: 'must_end',
       });
 
       expect(capturedPrompt).toContain('必须结束');
+      expect(capturedPrompt).toContain('大纲主题已全部覆盖');
+      // 主题已问完：收尾语原样返回，由服务层切换阶段
+      expect(result.shouldEndMainPhase).toBe(true);
+      expect(result.questionType).toBe('reverse');
+    });
+
+    it('should keep the interview going when the model ends early with topics left', async () => {
+      // 模型无视覆盖前置条件输出收尾语：必须被纠回继续出题，
+      // 否则告别语会被当成下一题写入转录（候选人看到告别语还要作答）
+      setupModel(mockAiService.generateInterviewQuestion, [
+        {
+          ...validTurn,
+          topicKey: undefined,
+          question: '今天就聊到这里，你有什么想问我的吗？',
+          questionType: 'reverse',
+          shouldEndMainPhase: true,
+        },
+      ]);
+
+      const result = await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        // 仅自我介绍已覆盖，还剩 2 个主题
+        askedTopicKeys: ['self_intro'],
+        elapsedMinutes: 47,
+        askedCount: 24,
+        endPolicy: 'can_end',
+      });
+
+      expect(result.shouldEndMainPhase).toBe(false);
+      expect(result.topicKey).toBe('order_system_refactor');
+      expect(result.questionType).toBe('project');
+      expect(result.question).toContain('订单系统重构');
+      expect(result.question).not.toContain('今天');
+    });
+
+    it('should only clear the end flag when the early-ending question still targets a remaining topic', async () => {
+      // 模型只是提前置位了收尾标记，题目本身仍指向未覆盖主题：保留题目文本
+      setupModel(mockAiService.generateInterviewQuestion, [
+        {
+          ...validTurn,
+          topicKey: 'tcp_handshake',
+          question: '说说 TCP 三次握手的必要性？',
+          questionType: 'fundamentals',
+          shouldEndMainPhase: true,
+        },
+      ]);
+
+      const result = await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: ['self_intro', 'order_system_refactor'],
+        elapsedMinutes: 61,
+        askedCount: 24,
+        endPolicy: 'must_end',
+      });
+
+      expect(result.shouldEndMainPhase).toBe(false);
+      expect(result.question).toBe('说说 TCP 三次握手的必要性？');
+      expect(result.topicKey).toBe('tcp_handshake');
+    });
+
+    it('should keep honoring a candidate-requested end even with topics left', async () => {
+      // 候选人主动终止优先级最高，不受覆盖前置条件影响
+      setupModel(mockAiService.generateInterviewQuestion, [
+        {
+          ...validTurn,
+          topicKey: undefined,
+          question: '好的，那今天就先到这里，祝后续顺利。',
+          questionType: 'reverse',
+          shouldEndMainPhase: true,
+          userRequestedEnd: true,
+        },
+      ]);
+
+      const result = await service.generateTurn({
+        jobDescription: '负责后端服务开发',
+        resume: {},
+        levelConfig,
+        outline,
+        messages,
+        askedTopicKeys: ['self_intro'],
+        elapsedMinutes: 20,
+        askedCount: 8,
+        endPolicy: 'cannot_end',
+      });
+
+      expect(result.shouldEndMainPhase).toBe(true);
+      expect(result.userRequestedEnd).toBe(true);
+      expect(result.question).toContain('祝后续顺利');
     });
 
     it('should pass remaining topics excluding already asked ones', async () => {
@@ -488,7 +745,8 @@ describe('QuestionEngineService - 出题引擎', () => {
         levelConfig,
         outline,
         messages,
-        askedTopicKeys: [],
+        // 大纲主题已全部覆盖，收尾语才被允许
+        askedTopicKeys: outline.map((topic) => topic.key),
         elapsedMinutes: 35,
         askedCount: 16,
         endPolicy: 'can_end',

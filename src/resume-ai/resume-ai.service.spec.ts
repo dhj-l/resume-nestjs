@@ -1178,4 +1178,101 @@ describe('ResumeAiService - validateResumeContent', () => {
       });
     });
   });
+
+  describe('AI 落库路径排序字段归一化', () => {
+    const userId = '507f1f77bcf86cd799439011';
+    const validResumeContent = `
+        个人信息
+        姓名：张三
+        电话：13800138000
+        邮箱：zhangsan@example.com
+
+        教育背景
+        2016年9月至2020年6月，上海交通大学，软件工程专业，本科学历。
+        在校期间成绩优异，获得过多次奖学金。
+
+        工作经历
+        2020年7月至2023年8月，在某互联网公司担任前端开发工程师。
+        负责公司核心产品的前端开发与架构设计。
+
+        技能特长
+        熟练掌握Vue3、TypeScript、Node.js等技术栈。`;
+
+    // 复现线上问题：AI 给 projectExperience 与 internshipExperience 都返回 globalSort=3，
+    // 前端"交换式排序"对相等值是空操作，导致模块无法排序
+    const aiResumeWithDuplicateSort = {
+      title: '张三-前端开发工程师',
+      basicInfo: { name: '张三', phone: '13800138000' },
+      skills: { content: 'Vue3' },
+      educationBackground: [
+        { schoolName: '上海交通大学', globalSort: 2, localSort: 1 },
+      ],
+      projectExperience: [{ title: '项目一', globalSort: 3, localSort: 1 }],
+      internshipExperience: [
+        { companyName: '某公司', globalSort: 3, localSort: 1 },
+      ],
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      (mockResumeAiModel.findOne as jest.Mock).mockResolvedValue(null);
+      (mockResumeAiModel.create as jest.Mock).mockResolvedValue({
+        _id: 'record-1',
+        templateType: 'default',
+        save: jest.fn().mockResolvedValue(undefined),
+      });
+      (mockResumeAiModel.updateOne as jest.Mock).mockResolvedValue({
+        matchedCount: 1,
+      });
+      (mockResumeModel.create as jest.Mock).mockResolvedValue({
+        _id: 'resume-id-123',
+      });
+      (mockAiUsageRecordModel.create as jest.Mock).mockResolvedValue({});
+      (mockAiService as any).generateImportResume = jest
+        .fn()
+        .mockReturnValue(RunnableLambda.from(async () => 'raw'));
+      (mockAiService as any).generateResume = jest
+        .fn()
+        .mockReturnValue(RunnableLambda.from(async () => 'raw'));
+      (mockAiService as any).createStructuredParser = jest
+        .fn()
+        .mockReturnValue(
+          RunnableLambda.from(async () => aiResumeWithDuplicateSort),
+        );
+    });
+
+    it('parseResume（智能导入）落库前消除重复 globalSort', async () => {
+      await service.parseResume(
+        {
+          resumeContent: validResumeContent,
+          templateType: 'default',
+        } as any,
+        userId,
+      );
+
+      const created = (mockResumeModel.create as jest.Mock).mock.calls[0][0];
+      // education(2) < project(3) < internship(4)：同值时按默认序号决胜
+      expect(created.educationBackground[0].globalSort).toBe(2);
+      expect(created.projectExperience[0].globalSort).toBe(3);
+      expect(created.internshipExperience[0].globalSort).toBe(4);
+      expect(created['skills.globalSort']).toBeUndefined();
+      expect(created.skills).toEqual({ content: 'Vue3', globalSort: 6 });
+    });
+
+    it('generateUploadResume（legacy 同步生成）落库前消除重复 globalSort', async () => {
+      await service.generateUploadResume(
+        {
+          parseType: ResumeAiTypeEnum.Upload,
+          jobDescription: '前端开发工程师，要求熟悉 Vue3',
+          templateType: 'default',
+          resumeContent: validResumeContent,
+        } as any,
+        userId,
+      );
+
+      const created = (mockResumeModel.create as jest.Mock).mock.calls[0][0];
+      expect(created.projectExperience[0].globalSort).toBe(3);
+      expect(created.internshipExperience[0].globalSort).toBe(4);
+    });
+  });
 });

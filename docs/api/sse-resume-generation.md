@@ -118,7 +118,8 @@
 | `retryCount` | number | 重试次数（仅在重试时出现） |
 | `totalModules` | number | 总模块数量（固定为11） |
 | `currentModule` | number | 当前模块索引（0-11） |
-| `recordId` | string | 数据库记录ID（仅在init消息中返回） |
+| `resumeId` | string | 生成的简历ID（`init` 与 `complete` 消息中返回） |
+| `data` | object / array | 模块生成的数据（模块 `completed` 帧携带，结构与简历字段一致） |
 
 ### 消息类型说明
 
@@ -137,7 +138,7 @@
 ### 1. 初始化消息（首个消息）
 
 ```
-data: {"type":"init","moduleName":"system","status":"started","message":"简历生成任务已创建","totalModules":11,"currentModule":0,"recordId":"507f1f77bcf86cd799439011"}
+data: {"type":"init","moduleName":"system","status":"started","message":"简历生成任务已创建","totalModules":11,"currentModule":0,"resumeId":"507f1f77bcf86cd799439011"}
 
 ```
 
@@ -151,7 +152,7 @@ data: {"type":"progress","moduleName":"basicInfo","status":"processing","message
 ### 3. 模块完成消息
 
 ```
-data: {"type":"progress","moduleName":"basicInfo","status":"completed","message":"basicInfo模块处理完成","totalModules":11,"currentModule":1}
+data: {"type":"progress","moduleName":"basicInfo","status":"completed","message":"basicInfo模块处理完成","totalModules":11,"currentModule":1,"resumeId":"507f1f77bcf86cd799439011","data":{"basicInfo":{}}}
 
 ```
 
@@ -165,7 +166,7 @@ data: {"type":"progress","moduleName":"skills","status":"retrying","message":"sk
 ### 5. 完成消息（最后一个消息）
 
 ```
-data: {"type":"complete","moduleName":"complete","status":"completed","message":"简历生成完成","totalModules":11,"currentModule":11}
+data: {"type":"complete","moduleName":"complete","status":"completed","message":"简历生成完成","totalModules":11,"currentModule":11,"resumeId":"507f1f77bcf86cd799439011"}
 
 ```
 
@@ -216,6 +217,24 @@ data: {"type":"error","moduleName":"system","status":"failed","message":"AI调�
 | 9 | `projectExperience` | 项目经历 | 项目经验 |
 | 10 | `campusExperience` | 校园经历 | 校园活动经历 |
 | 11 | `internshipExperience` | 实习经历 | 实习经验 |
+
+---
+
+## 模块排序字段（globalSort / localSort）约定
+
+参与全局排序的 8 个模块及其默认序号（与 prompt 规范一致）：`workExperience`=1、`projectExperience`=2、`educationBackground`=3、`internshipExperience`=4、`campusExperience`=5、`skills`=6、`certificates`=7、`selfEvaluation`=8。`basicInfo`、`jobIntention` 为前端固定位模块，不参与排序。
+
+契约（服务端保证）：
+
+1. **模块级唯一**：同一份简历中，有内容的模块 `globalSort` 两两不相等（连续 1..n，仅收敛数值，不改变模块相对顺序）。前端"交换式排序"依赖该唯一性——两个模块同值时交换是空操作，表现为"点了没反应"。
+2. **正整数**：`0` 视为缺失（AI 遗漏时会被 schema default 补成 0），不参与排序，由服务端按默认序号补位。
+3. **模块内一致**：同一数组模块内所有条目的 `globalSort` 相同，条目顺序由 `localSort`（1..n，按既有相对顺序重编）决定。
+4. **保证位置**：
+   - SSE 生成：全部模块落库后由服务端统一重编号；
+   - 智能导入 `POST /resume-ai/parse`、同步生成 `POST /resume-ai/generate`：落库前归一化；
+   - `PATCH /resume/:id` 保存：仅在检出重复/非正 `globalSort` 时按相对顺序兜底重编，正常换序写入的唯一值原样保存（幂等）。
+
+存量数据可用 `pnpm repair:resume-sort`（支持 `--dry-run`）一次性修复。
 
 ---
 
@@ -490,7 +509,7 @@ class ResumeGenerator {
 | 接口 | 说明 |
 |------|------|
 | `POST /resume-ai/generate` | 同步生成简历（非SSE方式） |
-| `POST /resume-ai/parse` | 解析简历内容 |
+| `POST /resume-ai/parse` | 智能导入：解析简历文本并直接创建简历（落库前归一化排序字段） |
 | `GET /resume/:id` | 获取生成的简历详情 |
 
 ---
@@ -500,6 +519,7 @@ class ResumeGenerator {
 | 日期 | 版本 | 说明 |
 |------|------|------|
 | 2025-03-30 | v1.0 | 初始版本，实现SSE实时推送功能 |
+| 2026-09-30 | v1.1 | 补齐 `resumeId` / `data` 字段说明；新增模块排序字段（globalSort）约定与修复脚本说明 |
 
 ---
 

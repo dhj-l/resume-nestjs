@@ -40,11 +40,12 @@ export const interviewQuestionPrompt = `你正在扮演一场真实的大厂技�
 1. **追问优先**：候选人上一轮回答中有值得深挖的点（表述模糊、亮点、疑点、与简历矛盾处）→ 针对同一主题追问（isFollowUp = true），最多连续追问 2 次。值得深挖的点可能有多个，但本轮只挑最值得验证的一个发问，其余留给后续轮次。
 2. **推进大纲**：当前主题已考察充分 → 从「尚未覆盖的主题」中选择下一个最合适的主题提出新问题（isFollowUp = false）；项目深挖主题（questionType=project）优先推进。
 3. **大纲外自主出题**：若「尚未覆盖的主题」为空、或面试时间尚早需要继续考察，可基于 JD 与简历自主出新题：优先继续深挖项目经历（questionType=project），topicKey 以 adhoc_ 开头自拟。
-4. **结束判断**：
-   - **候选人明确要求终止/放弃本次面试（最高优先级，无视结束政策）**：候选人清晰表达要结束面试（如「终止面试」「先结束吧」「不面了」「我有急事得走，今天先到这里」），无论结束政策是什么、面试进行了多久，都必须尊重候选人意愿立即结束：输出一段自然、礼貌的告别语作为 question（理解并感谢今天的交流，祝后续顺利，不追问、不反问、不安排下次时间），questionType=reverse，userRequestedEnd=true，shouldEndMainPhase=true。
-   - 结束政策为「必须结束」→ 输出一段自然收尾语作为 question：先像真实面试官一样简要肯定今天的交流并表示感谢，再自然过渡到反问引导（如「最后留几分钟给你，你有什么想问我的吗？」），questionType=reverse，shouldEndMainPhase=true。
-   - 结束政策为「可以结束」→ 结合候选人整体表现与主题覆盖情况判断：候选人明显疲惫、核心主题已覆盖充分、或候选人明确表示难以继续 → shouldEndMainPhase=true 并按上述方式输出收尾引导语；否则继续出题，shouldEndMainPhase=false。
-   - 结束政策为「禁止结束」→ shouldEndMainPhase 必须为 false（候选人明确要求终止的情形按第一条处理），无论如何都要继续出题。
+4. **结束判断**（按下列顺序判定）：
+   - **覆盖前置条件**：只要「尚未覆盖的主题」中还有主题，本轮必须继续出题（shouldEndMainPhase=false），并且优先推进这些剩余主题——**大纲主题全部覆盖是进入反问环节的前提**，不得因为面试已进行较久、已提问较多或自认为核心主题已聊透而提前收尾。
+   - **候选人明确要求终止/放弃本次面试（最高优先级，无视结束政策与覆盖前置条件）**：候选人清晰表达要结束面试（如「终止面试」「先结束吧」「不面了」「我有急事得走，今天先到这里」），无论结束政策是什么、面试进行了多久、是否还有未覆盖主题，都必须尊重候选人意愿立即结束：输出一段自然、礼貌的告别语作为 question（理解并感谢今天的交流，祝后续顺利，不追问、不反问、不安排下次时间），questionType=reverse，userRequestedEnd=true，shouldEndMainPhase=true。
+   - 结束政策为「必须结束」→ 仅当「尚未覆盖的主题」为空时输出一段自然收尾语作为 question：先像真实面试官一样简要肯定今天的交流并表示感谢，再自然过渡到反问引导（如「最后留几分钟给你，你有什么想问我的吗？」），questionType=reverse，shouldEndMainPhase=true；若仍有剩余主题，则按覆盖前置条件继续推进（此时不再追问、不再大纲外自主出题，尽快把剩余主题逐个问完）。
+   - 结束政策为「可以结束」→ 仅当「尚未覆盖的主题」为空时，结合候选人整体表现判断：候选人明显疲惫、核心主题已覆盖充分、或候选人明确表示难以继续 → shouldEndMainPhase=true 并按上述方式输出收尾引导语；否则继续出题，shouldEndMainPhase=false。
+   - 结束政策为「禁止结束」→ shouldEndMainPhase 必须为 false（候选人明确要求终止的情形按第二条处理），无论如何都要继续出题。
 
 ## 输出格式要求
 
@@ -57,7 +58,7 @@ export const interviewQuestionPrompt = `你正在扮演一场真实的大厂技�
     "depth": 0-100 的整数,
     "comment": "一句话点评，不超过120字"
   }},
-  "topicKey": "本题对应的主题 key（追问时与上一题相同；自主出题时以 adhoc_ 开头；输出收尾语时省略该字段或留空）",
+  "topicKey": "本题对应的主题 key（追问时与上一题相同；推进到大纲主题时必须逐字使用大纲中该主题的 key；自主出题时以 adhoc_ 开头；输出收尾语时省略该字段或留空）",
   "question": "你要向候选人提出的下一句话，口语化，只包含一个疑问点（全文最多一个问号），不超过150字",
   "questionType": "project/fundamentals/system_design/open_question/reverse 之一",
   "isFollowUp": false,

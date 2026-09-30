@@ -15,6 +15,7 @@ import {
   InterviewEndedReasonEnum,
   InterviewPhaseEnum,
   InterviewStatusEnum,
+  MAIN_PHASE_HARD_STOP_MS,
   MAX_REVERSE_QUESTIONS,
   OUTLINE_FILL_TIMEOUT_MS,
   QuestionTypeEnum,
@@ -45,6 +46,10 @@ import {
   resolveEndPolicy,
   resolveStageConfig,
 } from './utils/stage-compat';
+import {
+  remainingOutlineTopics,
+  shouldEnterReversePhase,
+} from './utils/outline-coverage.utils';
 import { timeoutCloseFields } from './utils/session-state.utils';
 import { QuestionEngineService } from './services/question-engine.service';
 import { EvaluationService } from './services/evaluation.service';
@@ -369,12 +374,18 @@ export class InterviewService {
     const currentRound = session.currentRound;
     const isRetry = await this.appendCandidateMessage(session, dto);
 
-    // 时长驱动的结束政策：不足 30 分钟禁止收尾；满 60 分钟强制收尾；
-    // 满 30 分钟且超过题数软上限后交给 AI 根据候选人表现判断
+    // 时长驱动的结束政策：不足 30 分钟禁止收尾；满 60 分钟进入强制收尾
+    // 通道；满 30 分钟且超过题数软上限后交给 AI 根据候选人表现判断。
+    // 另叠加覆盖前置条件：大纲主题未问完不得进入反问环节（见
+    // shouldEnterReversePhase），避免 15 个主题只考察 12 个就收尾
     const elapsedMs = Date.now() - session.startedAt.getTime();
     const elapsedMinutes = Math.max(0, Math.floor(elapsedMs / 60_000));
     const askedCount = countInterviewerQuestions(session.messages);
     const endPolicy = resolveEndPolicy(elapsedMs, askedCount);
+    const remainingTopics = remainingOutlineTopics(
+      session.outline,
+      session.askedTopicKeys,
+    );
 
     // LLM 调用失败时回滚刚追加的回答，避免被放弃的回答以无反馈形态
     // 混入报告转录（重试检测依赖的遗留消息仅在崩溃等无回滚场景出现）
@@ -407,9 +418,9 @@ export class InterviewService {
       turn.feedback,
     );
 
-    // 候选人明确要求终止面试：无视结束政策与时长规则，以 AI 告别语直接
-    // 收尾出报告（user_finish），不再进入反问环节——现实中候选人说
-    // 「我有急事得走」时，面试官道别后面试就结束了
+    // 候选人明确要求终止面试：无视结束政策、时长规则与覆盖前置条件，
+    // 以 AI 告别语直接收尾出报告（user_finish），不再进入反问环节——现实中
+    // 候选人说「我有急事得走」时，面试官道别后面试就结束了
     if (turn.userRequestedEnd === true) {
       const farewellRound = await this.appendInterviewerMessage(
         session,
@@ -431,9 +442,35 @@ export class InterviewService {
       );
     }
 
-    const shouldTransition =
-      endPolicy === 'must_end' ||
-      (endPolicy === 'can_end' && turn.shouldEndMainPhase === true);
+    const shouldTransition = shouldEnterReversePhase({
+      endPolicy,
+      aiRequestsEnd: turn.shouldEndMainPhase === true,
+      remainingCount: remainingTopics.length,
+      elapsedMs,
+    });
+    // 覆盖前置条件压过时长政策时留痕：便于线上确认「15 个主题只问了 12 个」
+    // 这类问题是否已消除（正常路径不产生日志）
+    if (
+      !shouldTransition &&
+      remainingTopics.length > 0 &&
+      endPolicy !== 'cannot_end'
+    ) {
+      this.logger.warn(
+        `主体阶段仍有 ${remainingTopics.length} 个大纲主题未覆盖，本轮继续出题（session=${session._id} round=${currentRound} policy=${endPolicy}）`,
+      );
+    }
+    if (
+      shouldTransition &&
+      remainingTopics.length > 0 &&
+      elapsedMs >= MAIN_PHASE_HARD_STOP_MS
+    ) {
+      // 硬停止兜底生效：为不让主体阶段卡死而带着未覆盖主题收尾
+      this.logger.warn(
+        `主体阶段已达硬停止（session=${session._id}），仍有 ${remainingTopics.length} 个主题未覆盖：${remainingTopics
+          .map((topic) => topic.key)
+          .join('、')}`,
+      );
+    }
     if (shouldTransition) {
       // AI 已按约定输出收尾引导语时使用；否则本地模板兜底，保证反问必然开启
       const closing =

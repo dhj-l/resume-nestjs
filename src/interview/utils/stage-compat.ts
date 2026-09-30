@@ -104,9 +104,13 @@ export function normalizeLevelConfig(
  * 依据主体阶段已进行时长与已问题数得出结束政策
  *
  * 规则（贴近真实大厂面试节奏）：
- * - 满 60 分钟：强制收尾（AI 主动引导进入结束环节）
+ * - 满 60 分钟：进入强制收尾通道（AI 主动引导进入结束环节）
  * - 不足 30 分钟：禁止收尾，即使题目已很多
  * - 满 30 分钟：题数未超过软上限继续面试；超过后由 AI 根据回答判断
+ *
+ * 本函数只表达时长/题数口径；「大纲主题未问完不得收尾」的覆盖前置
+ * 条件由 outline-coverage.utils 的 shouldEnterReversePhase 在其之上叠加，
+ * 是进入反问环节的唯一判定入口。
  */
 export function resolveEndPolicy(
   elapsedMs: number,
