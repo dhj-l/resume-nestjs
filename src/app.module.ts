@@ -8,10 +8,11 @@ import { UserModule } from './user/user.module';
 import { ResumeModule } from './resume/resume.module';
 import { JwtModule } from '@nestjs/jwt';
 import { AuthModule } from './auth/auth.module';
-import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
 import { UploadModule } from './common/upload/upload.module';
 import { TemplateModule } from './template/template.module';
 import { AiModule } from './ai/ai.module';
@@ -23,12 +24,28 @@ import { CryptoModule } from './common/crypto.module';
 import { AdminModule } from './admin/admin.module';
 import { InterviewModule } from './interview/interview.module';
 
+/** 解析正整数环境变量，非法/缺失时回退默认值（避免被空串解析成 0 而全民 429） */
+function parsePositiveInt(raw: unknown, fallback: number): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
 
-    // 全局速率限制：每个 IP 每 60 秒最多 30 次请求
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 30 }]),
+    // 全局限流：默认每个计数主体（已登录按 userId，未登录按 IP）
+    // 在每个路由上每 60 秒 120 次；可用 THROTTLE_TTL_MS / THROTTLE_LIMIT 调整。
+    // 具体某个端点可以用 @Throttle 单独收紧（登录/OAuth/面试/AI 已各设为 10 次/分钟）。
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => [
+        {
+          ttl: parsePositiveInt(config.get<string>('THROTTLE_TTL_MS'), 60000),
+          limit: parsePositiveInt(config.get<string>('THROTTLE_LIMIT'), 120),
+        },
+      ],
+    }),
 
     MongooseModule.forRootAsync({
       inject: [ConfigService],
@@ -61,6 +78,11 @@ import { InterviewModule } from './interview/interview.module';
   controllers: [AppController],
   providers: [
     AppService,
+    {
+      // 全局限流守卫：必须显式注册，否则 ThrottlerModule 与 @Throttle 都是死配置
+      provide: APP_GUARD,
+      useClass: UserThrottlerGuard,
+    },
     {
       provide: APP_INTERCEPTOR,
       useClass: LoggingInterceptor,
