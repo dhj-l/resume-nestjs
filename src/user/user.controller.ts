@@ -12,10 +12,12 @@ import {
   Query,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard, isAdminEmail } from '../auth/guards/admin.guard';
 import { LoginDto } from './dto/login-dto';
 import type { Request } from 'express';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -30,7 +32,18 @@ type RequestWithUser = Request & {
 
 @Controller('user')
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly config: ConfigService,
+  ) {}
+
+  /** 当前请求者是否为管理员（ADMIN_EMAILS 白名单） */
+  private isAdmin(req: RequestWithUser): boolean {
+    return isAdminEmail(
+      req.user?.email,
+      this.config.get<string>('ADMIN_EMAILS'),
+    );
+  }
 
   /**
    * 创建新用户
@@ -43,14 +56,17 @@ export class UserController {
   }
 
   /**
-   * 用户登录（速率限制：60 秒内最多 5 次，防暴力破解）
+   * 用户登录（速率限制：每个来源 60 秒内最多 10 次，防暴力破解）
    * @param loginDto 登录 DTO
+   * @param req 请求对象，用于取客户端 IP
    * @returns 包含 JWT token 和用户信息的对象
    */
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('login')
-  async login(@Body() loginDto: LoginDto) {
-    return this.userService.login(loginDto);
+  async login(@Body() loginDto: LoginDto, @Req() req: Request) {
+    // 传入客户端 IP：失败计数与临时锁定按 (邮箱, 来源) 粒度生效，
+    // 这样陌生人无法通过反复输错密码锁死某个真实用户的账号。
+    return this.userService.login(loginDto, req.ip);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -65,11 +81,11 @@ export class UserController {
 
   /**
    * 获取所有用户列表(支持分页、搜索、筛选)
-   * TODO: 当角色系统完善后添加 AdminGuard 限制仅管理员可访问
+   * 管理员专属：普通用户只能看自己的 profile，不允许枚举全站用户
    * @param query 查询参数（page, pageSize, keyword, createdVia）
-   * @returns 分页用户列表
+   * @returns 分页用户列表（已脱敏，不含密码与 OAuth 令牌）
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get()
   async findAll(@Query() query: QueryUserDto) {
     return this.userService.findAll(query);
@@ -103,6 +119,27 @@ export class UserController {
   }
 
   /**
+   * 更新当前登录用户的信息(不允许修改密码)
+   *
+   * 注意：必须声明在 `@Patch(':id')` **之前**。Express 按注册顺序匹配路由，
+   * 否则 `PATCH /user/profile` 会被 `:id` 捕获（id="profile"），
+   * 进而在归属校验里被判成「改别人的资料」而恒返回 403。
+   *
+   * @param req 请求对象,包含用户信息
+   * @param updateUserDto 更新 DTO
+   * @returns 更新后的用户对象
+   */
+  @UseGuards(JwtAuthGuard)
+  @Patch('profile')
+  async updateProfile(
+    @Req() req: RequestWithUser,
+    @Body() updateUserDto: UpdateUserDto,
+  ) {
+    const { userId } = req.user;
+    return this.userService.updateProfile(userId, updateUserDto);
+  }
+
+  /**
    * 更新指定用户信息(仅管理员或用户自己)
    * @param id 用户 ID
    * @param updateUserDto 更新 DTO
@@ -118,7 +155,7 @@ export class UserController {
   ) {
     const { userId } = req.user;
     // 检查是否为管理员或修改自己的信息
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = this.isAdmin(req);
     if (!isAdmin && userId !== id) {
       throw new ForbiddenException('没有权限修改该用户信息');
     }
@@ -136,7 +173,7 @@ export class UserController {
   async remove(@Param('id') id: string, @Req() req: RequestWithUser) {
     const { userId } = req.user;
     // 检查是否为管理员或删除自己的账户
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = this.isAdmin(req);
     if (!isAdmin && userId !== id) {
       throw new ForbiddenException('没有权限删除该用户');
     }
@@ -157,23 +194,6 @@ export class UserController {
   }
 
   /**
-   * 更新当前登录用户的信息(不允许修改密码)
-   * @param req 请求对象,包含用户信息
-   * @param updateUserDto 更新 DTO
-   * @returns 更新后的用户对象
-   */
-  // 更新当前用户信息（不允许在此修改密码）
-  @UseGuards(JwtAuthGuard)
-  @Patch('profile')
-  async updateProfile(
-    @Req() req: RequestWithUser,
-    @Body() updateUserDto: UpdateUserDto,
-  ) {
-    const { userId } = req.user;
-    return this.userService.updateProfile(userId, updateUserDto);
-  }
-
-  /**
    * 获取指定用户的详细信息(仅管理员或用户自己)
    * @param id 用户 ID
    * @param req 请求对象,包含用户信息
@@ -184,7 +204,7 @@ export class UserController {
   async findOne(@Param('id') id: string, @Req() req: RequestWithUser) {
     const { userId } = req.user;
     // 检查是否为管理员或查看自己的信息
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = this.isAdmin(req);
     if (!isAdmin && userId !== id) {
       throw new ForbiddenException('没有权限查看该用户信息');
     }

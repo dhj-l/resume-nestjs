@@ -27,24 +27,78 @@
 
 ## 环境变量配置
 
-在部署前，请确保配置以下环境变量：
+### 启动即必需（缺失会导致容器启动失败）
+
+这些键在模块初始化 / 构造函数里用 `getOrThrow` 读取，缺任何一个服务直接起不来：
 
 ```bash
-# 服务器端口（默认 3000）
-PORT=3000
-
 # MongoDB 数据库连接字符串
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/ai-resume
 
-# JWT 密钥（请使用强密码）
+# JWT 密钥（请使用强随机字符串，至少 32 字符）
 JWT_SECRET=your-very-secure-jwt-secret-key
 
-# DeepSeek API 密钥
+# OAuth 令牌加密密钥（AES-256，32 字符以上）；不配置则第三方令牌明文入库
+ENCRYPTION_KEY=your-32-char-encryption-key-here
+
+# 三个 OAuth 平台各需 4 个键（client id / secret / redirect uri / frontend callback url）
+GITEE_CLIENT_ID=...
+GITEE_CLIENT_SECRET=...
+GITEE_REDIRECT_URI=https://your-domain/api/v1/auth/gitee/callback
+GITEE_FRONTEND_CALLBACK_URL=https://your-front-end/auth/gitee/callback
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+GITHUB_REDIRECT_URI=https://your-domain/api/v1/auth/github/callback
+GITHUB_FRONTEND_CALLBACK_URL=https://your-front-end/auth/github/callback
+QQ_CLIENT_ID=...
+QQ_CLIENT_SECRET=...
+QQ_REDIRECT_URI=https://your-domain/api/v1/auth/qq/callback
+QQ_FRONTEND_CALLBACK_URL=https://your-front-end/auth/qq/callback
+```
+
+### 首次请求才失败（服务会「健康启动」但接口报错，务必提前配置）
+
+```bash
+# DeepSeek API 密钥（简历生成/分析/押题/面试报告）
 DEEPSEEK_API_KEY=sk-your-deepseek-api-key
+
+# MiMo 语音服务密钥（面试问题朗读 TTS / 语音识别 ASR），未配置时对应接口不可用
+MIMO_API_KEY=your-mimo-api-key
+```
+
+### 安全与限流（不配也能启动，但会削弱安全性）
+
+```bash
+# 管理员邮箱白名单（逗号分隔）。管理端 /api/v1/admin/** 与用户列表 GET /api/v1/user
+# 仅这些邮箱可访问；未配置时管理端一律 403（fail closed）——管理后台会完全无法登录。
+ADMIN_EMAILS=admin@your-domain.com
+
+# 反向代理信任跳数。客户端直连 API（如 http://host:3000）时保持 false；
+# 若全部流量经 nginx / 负载均衡转发则必须设为 1，否则所有用户被算成同一个代理 IP，
+# 导致限流与登录失败计数互相干扰。
+TRUST_PROXY=false
+
+# 全局限流窗口与额度（默认 60000ms / 120 次，按「已登录 userId / 未登录 IP」计数）
+# 登录、OAuth、面试、简历 AI 另有 10 次/分钟的单独限制
+THROTTLE_TTL_MS=60000
+THROTTLE_LIMIT=120
+
+# CORS 白名单（逗号分隔）。不配置会回退到 localhost，线上前端会被浏览器拦截。
+CORS_ORIGINS=https://your-front-end
+
+# 日志级别：debug | info | warn | error
+LOG_LEVEL=info
+
+# 服务器端口（默认 3000）
+PORT=3000
 
 # 运行环境
 NODE_ENV=production
 ```
+
+> ⚠️ 部署后请先用管理员邮箱登录一次，确认 `GET /api/v1/admin/dashboard` 返回 200，
+> 再交付管理后台，否则多半是 `ADMIN_EMAILS` 没配对。
+
 
 ---
 

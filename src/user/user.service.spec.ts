@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { BadRequestException } from '@nestjs/common';
 import { UserService } from './user.service';
 import { TokenBlacklistService } from '../auth/token-blacklist.service';
+import { LoginAttemptService } from './login-attempt.service';
 
 /* ------------------------------------------------------------------ */
 /*  Mock 工厂                                                        */
@@ -124,6 +125,18 @@ describe('UserService — findOrCreateOAuthUser', () => {
         {
           provide: TokenBlacklistService,
           useFactory: mockTokenBlacklistService,
+        },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();
@@ -683,6 +696,18 @@ describe('UserService — findAll', () => {
           provide: TokenBlacklistService,
           useFactory: mockTokenBlacklistService,
         },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
@@ -857,6 +882,18 @@ describe('UserService — getUserStats', () => {
           provide: TokenBlacklistService,
           useFactory: mockTokenBlacklistService,
         },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
@@ -927,5 +964,175 @@ describe('UserService — getUserStats', () => {
     const result = await service.getUserStats();
 
     expect(result.byPlatform).toEqual({ email: 50 });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  UserService — 敏感字段脱敏（P0-3）                                */
+/*                                                                    */
+/*  任何返回用户对象的方法都不得把 password 或 OAuth 令牌带出去：      */
+/*  此前 GET /user（任意登录用户可调）会连 accessToken/refreshToken    */
+/*  一起返回；remove() 甚至会把 bcrypt 哈希一起返回。                  */
+/*  同时必须保留平台/昵称/头像等展示字段，避免打断前端的账号绑定页。  */
+/* ------------------------------------------------------------------ */
+
+describe('UserService — 敏感字段脱敏', () => {
+  let service: UserService;
+  let mockModel: any;
+
+  const makeChain = () => {
+    const chain: any = {
+      select: jest.fn(),
+      skip: jest.fn(),
+      limit: jest.fn(),
+      sort: jest.fn(),
+      exec: jest.fn(),
+    };
+    chain.select.mockReturnValue(chain);
+    chain.skip.mockReturnValue(chain);
+    chain.limit.mockReturnValue(chain);
+    chain.sort.mockReturnValue(chain);
+    return chain;
+  };
+
+  /** 带全部敏感字段的用户文档 */
+  const userWithSecrets = () => ({
+    _id: 'u1',
+    username: 'alice',
+    email: 'alice@example.com',
+    password: '$2b$10$fakebcrypthash',
+    createdVia: 'github',
+    loginAttempts: 0,
+    oauthProviders: [
+      {
+        platform: 'github',
+        platformUserId: '42',
+        accessToken: 'cipher-access-token',
+        refreshToken: 'cipher-refresh-token',
+        tokenExpiresAt: new Date('2030-01-01T00:00:00.000Z'),
+        nickname: 'Alice',
+        avatarUrl: 'https://example.com/a.png',
+        profileUrl: 'https://github.com/alice',
+      },
+    ],
+  });
+
+  const expectNoSecrets = (user: any) => {
+    expect(user).toBeTruthy();
+    expect(user.password).toBeUndefined();
+    for (const provider of user.oauthProviders ?? []) {
+      expect(provider.accessToken).toBeUndefined();
+      expect(provider.refreshToken).toBeUndefined();
+      expect(provider.tokenExpiresAt).toBeUndefined();
+    }
+  };
+
+  beforeEach(async () => {
+    mockModel = {
+      find: jest.fn(() => makeChain()),
+      countDocuments: jest.fn(() => makeChain()),
+      findById: jest.fn(() => makeChain()),
+      findByIdAndUpdate: jest.fn(() => makeChain()),
+      findByIdAndDelete: jest.fn(() => makeChain()),
+      findOne: jest.fn(() => makeChain()),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        UserService,
+        { provide: getModelToken('User'), useValue: mockModel },
+        { provide: JwtService, useFactory: mockJwtService },
+        {
+          provide: TokenBlacklistService,
+          useFactory: mockTokenBlacklistService,
+        },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+      ],
+    }).compile();
+
+    service = module.get<UserService>(UserService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('findAll 返回的列表项不含密码与 OAuth 令牌', async () => {
+    const listChain = makeChain();
+    const countChain = makeChain();
+    mockModel.find.mockReturnValue(listChain);
+    mockModel.countDocuments.mockReturnValue(countChain);
+    listChain.exec.mockResolvedValue([userWithSecrets()]);
+    countChain.exec.mockResolvedValue(1);
+
+    const result = await service.findAll({});
+
+    expect(result.items).toHaveLength(1);
+    expectNoSecrets(result.items[0]);
+    // 展示字段必须保留，否则会打断账号绑定页
+    expect(result.items[0].username).toBe('alice');
+    expect(result.items[0].oauthProviders[0].platform).toBe('github');
+    expect(result.items[0].oauthProviders[0].nickname).toBe('Alice');
+    expect(result.items[0].oauthProviders[0].avatarUrl).toBe(
+      'https://example.com/a.png',
+    );
+  });
+
+  it('findOne 返回的对象不含密码与 OAuth 令牌', async () => {
+    const chain = makeChain();
+    mockModel.findById.mockReturnValue(chain);
+    chain.exec.mockResolvedValue(userWithSecrets());
+
+    const user = await service.findOne('u1');
+
+    expectNoSecrets(user);
+    expect(user.username).toBe('alice');
+    expect(user.oauthProviders[0].platformUserId).toBe('42');
+  });
+
+  it('getProfile（内部走 findOne）同样不含密码与 OAuth 令牌', async () => {
+    const chain = makeChain();
+    mockModel.findById.mockReturnValue(chain);
+    chain.exec.mockResolvedValue(userWithSecrets());
+
+    const user = await service.getProfile('u1');
+
+    expectNoSecrets(user);
+  });
+
+  it('updateProfile 返回的对象不含密码与 OAuth 令牌', async () => {
+    const chain = makeChain();
+    const uniqueCheckChain = makeChain();
+    mockModel.findByIdAndUpdate.mockReturnValue(chain);
+    mockModel.findOne.mockReturnValue(uniqueCheckChain);
+    chain.exec.mockResolvedValue(userWithSecrets());
+    // assertFieldUnique 会先查重，返回 null 表示用户名未被占用
+    uniqueCheckChain.exec.mockResolvedValue(null);
+
+    const user = await service.updateProfile('u1', { username: 'alice2' });
+
+    expectNoSecrets(user);
+  });
+
+  it('remove 返回的被删用户不含 bcrypt 哈希与 OAuth 令牌', async () => {
+    const chain = makeChain();
+    mockModel.findByIdAndDelete.mockReturnValue(chain);
+    chain.exec.mockResolvedValue(userWithSecrets());
+
+    const user = await service.remove('u1');
+
+    expectNoSecrets(user);
+    expect(user.username).toBe('alice');
   });
 });

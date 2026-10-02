@@ -9,16 +9,17 @@ import {
 } from '@nestjs/common';
 import { ResumeService } from './resume.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { AdminQueryResumeDto } from './dto/admin-query-resume.dto';
 
 /**
  * 管理员简历管理控制器
  *
  * 路由前缀: /api/v1/admin/resumes
- * TODO: 当角色系统完善后添加 AdminGuard 限制仅管理员可访问
+ * 鉴权：JwtAuthGuard（登录）+ AdminGuard（ADMIN_EMAILS 白名单）
  */
 @Controller('admin/resumes')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 export class AdminResumeController {
   private readonly logger = new Logger(AdminResumeController.name);
 
