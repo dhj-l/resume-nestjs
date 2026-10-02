@@ -119,6 +119,27 @@ export class UserController {
   }
 
   /**
+   * 更新当前登录用户的信息(不允许修改密码)
+   *
+   * 注意：必须声明在 `@Patch(':id')` **之前**。Express 按注册顺序匹配路由，
+   * 否则 `PATCH /user/profile` 会被 `:id` 捕获（id="profile"），
+   * 进而在归属校验里被判成「改别人的资料」而恒返回 403。
+   *
+   * @param req 请求对象,包含用户信息
+   * @param updateUserDto 更新 DTO
+   * @returns 更新后的用户对象
+   */
+  @UseGuards(JwtAuthGuard)
+  @Patch('profile')
+  async updateProfile(
+    @Req() req: RequestWithUser,
+    @Body() updateUserDto: UpdateUserDto,
+  ) {
+    const { userId } = req.user;
+    return this.userService.updateProfile(userId, updateUserDto);
+  }
+
+  /**
    * 更新指定用户信息(仅管理员或用户自己)
    * @param id 用户 ID
    * @param updateUserDto 更新 DTO
@@ -170,23 +191,6 @@ export class UserController {
   async getProfile(@Req() req: RequestWithUser) {
     const { userId } = req.user;
     return this.userService.findOne(userId);
-  }
-
-  /**
-   * 更新当前登录用户的信息(不允许修改密码)
-   * @param req 请求对象,包含用户信息
-   * @param updateUserDto 更新 DTO
-   * @returns 更新后的用户对象
-   */
-  // 更新当前用户信息（不允许在此修改密码）
-  @UseGuards(JwtAuthGuard)
-  @Patch('profile')
-  async updateProfile(
-    @Req() req: RequestWithUser,
-    @Body() updateUserDto: UpdateUserDto,
-  ) {
-    const { userId } = req.user;
-    return this.userService.updateProfile(userId, updateUserDto);
   }
 
   /**
