@@ -76,3 +76,34 @@
 - e2e 只允许操作名字以 `-e2e` 结尾的数据库，`dropDatabase` 前做断言，绝不碰开发库。
 - `ADMIN_EMAILS` 未配置 → 所有 `/admin/**` 一律 403（fail closed），不会因为漏配而放开。
 - 上传 e2e 记录自己创建的文件并在 `afterAll` 删除，不污染 `uploads/`。
+
+## 5. 实施结果（2026-10-02 完成）
+
+分支：`fix/p0-security-hardening`（基于 `feature/interview-questions`）
+
+| 提交 | 内容 |
+| --- | --- |
+| `352c4fa` | P0-1 构建产物入口修正 + `pnpm verify:build` 校验脚本 |
+| `4532ff8` | e2e 基础设施：抽出 `configureApp`、修 `jest-e2e.json`、冒烟用例 |
+| `bcc7f83` | P0-2 `AdminGuard` + 4 个 admin 控制器接线 |
+| `fd93348` | P0-3 用户对象统一脱敏 + `GET /user` 收紧为管理员专属 |
+| `aa4d18d` | P0-4 注册 `APP_GUARD`、按 userId 计数、阈值可配 |
+| `d84ad3a` | P0-5 登录不再可锁死他人账号 + 统一失败文案 |
+| `4b02d99` | P0-6 上传扩展名由 MIME 决定 + 魔数校验 |
+| `99d71b9` | 普通用户完整流程回归 + 修复 `PATCH /user/profile` 被 `:id` 遮蔽（顺带发现的既有 bug） |
+
+最终验证（全部在本地实测通过）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `pnpm lint` | 通过，0 错误 |
+| `pnpm test` | 43 suites / **628 tests** 全绿（修复前 38 suites / 577） |
+| `pnpm test:e2e` | 7 suites / **37 tests** 全绿（修复前该命令直接报错、0 个用例执行） |
+| `pnpm build && pnpm verify:build` | 通过，`dist/main.js` 存在 |
+| `npx tsc --noEmit` | 13 个错误，**全部为既有 spec 错误**，新增文件零错误 |
+| `node dist/main.js` | 启动后 `/api/v1/health` 返回 `database=connected` |
+
+偏离设计的一处（已确认更安全）：登录锁定除了「按 (邮箱, 来源 IP)」之外，还增加了
+「来源不可信则永不硬锁」的降级分支。原因见 2.4 —— 若 nginx 未配 `TRUST_PROXY`，
+所有用户会共享同一个代理 IP，此时按来源硬锁会退化成「一人锁死全体登录」。
+

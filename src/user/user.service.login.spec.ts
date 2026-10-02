@@ -25,7 +25,9 @@ describe('UserService.login — 登录保护', () => {
   let mockAttempts: any;
   let findOneChain: any;
 
-  const userDoc = (overrides: Record<string, unknown> = {}) => ({
+  const userDoc = (
+    overrides: Record<string, unknown> = {},
+  ): Record<string, any> => ({
     _id: 'u1',
     username: 'alice',
     email: 'alice@example.com',

@@ -31,10 +31,12 @@ pnpm seed:templates   # seed resume templates
 - Global API prefix `/api/v1`; every route lives under it.
 - Global `ValidationPipe({ whitelist: true, transform: true })` — DTOs must use `class-validator` decorators, otherwise unknown properties are silently stripped.
 - `LoggingInterceptor` + `ResponseInterceptor` (`APP_INTERCEPTOR`) and `AllExceptionsFilter` (`APP_FILTER`) are global.
-- Global rate limiting: 30 requests / 60 s per IP (`ThrottlerModule.forRoot`).
+- Global rate limiting is enforced by `UserThrottlerGuard` (`APP_GUARD`), counting per authenticated `userId` and per `req.ip` for anonymous requests: `THROTTLE_LIMIT` (default 120) per `THROTTLE_TTL_MS` (default 60000) **per route**. `@Throttle` on a controller/handler overrides it — registering `ThrottlerModule` alone does nothing, the guard must stay registered.
+- Admin endpoints (`/api/v1/admin/**`) and the user list (`GET /api/v1/user`) require `AdminGuard`: the caller's email must be listed in `ADMIN_EMAILS` (comma-separated). Unset means every admin request is 403 (fail closed).
 - `JwtModule` is global (secret from `JWT_SECRET`, 2-day expiry).
 - NestJS `Logger` is bridged to Winston in `src/main.ts`: all `new Logger(...)` calls also write daily-rotated files under `logs/`. Use `new Logger()`; don't hand-roll logging.
-- CORS origin whitelist comes from the `CORS_ORIGINS` env var (comma-separated).
+- CORS origin whitelist comes from the `CORS_ORIGINS` env var (comma-separated); set `TRUST_PROXY=1` when everything sits behind nginx, otherwise all clients share one proxy IP for rate limiting and login-attempt tracking.
+- HTTP configuration (prefix, helmet, CORS, static assets, `ValidationPipe`) lives in `src/bootstrap.ts`'s `configureApp()` and is shared by `src/main.ts` and the e2e tests — don't re-implement it in `main.ts`.
 
 
 ## Coding Style & Naming Conventions
