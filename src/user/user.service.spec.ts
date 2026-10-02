@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { BadRequestException } from '@nestjs/common';
 import { UserService } from './user.service';
 import { TokenBlacklistService } from '../auth/token-blacklist.service';
+import { LoginAttemptService } from './login-attempt.service';
 
 /* ------------------------------------------------------------------ */
 /*  Mock 工厂                                                        */
@@ -124,6 +125,18 @@ describe('UserService — findOrCreateOAuthUser', () => {
         {
           provide: TokenBlacklistService,
           useFactory: mockTokenBlacklistService,
+        },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();
@@ -683,6 +696,18 @@ describe('UserService — findAll', () => {
           provide: TokenBlacklistService,
           useFactory: mockTokenBlacklistService,
         },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
@@ -857,6 +882,18 @@ describe('UserService — getUserStats', () => {
           provide: TokenBlacklistService,
           useFactory: mockTokenBlacklistService,
         },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
@@ -1008,6 +1045,18 @@ describe('UserService — 敏感字段脱敏', () => {
         {
           provide: TokenBlacklistService,
           useFactory: mockTokenBlacklistService,
+        },
+        {
+          provide: LoginAttemptService,
+          useValue: {
+            checkLocked: jest
+              .fn()
+              .mockResolvedValue({ locked: false, remainingMs: 0 }),
+            recordFailure: jest
+              .fn()
+              .mockResolvedValue({ failures: 1, locked: false, delayMs: 0 }),
+            clear: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();

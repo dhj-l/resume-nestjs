@@ -17,6 +17,20 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { sanitizeOAuthUser } from '../common/oauth/sanitize-user.util';
 import { TokenBlacklistService } from '../auth/token-blacklist.service';
 import { QueryUserDto } from './dto/query-user.dto';
+import { LoginAttemptService } from './login-attempt.service';
+
+/**
+ * 登录失败的统一文案（P0-5）
+ *
+ * 「邮箱不存在」与「密码错误」必须完全一致，否则可以枚举出哪些邮箱已注册。
+ */
+export const LOGIN_FAILED_MESSAGE = '邮箱或密码错误';
+
+/**
+ * 用于「邮箱不存在」时抹平响应耗时的比对目标（不是任何真实账号的密码）
+ */
+const DUMMY_PASSWORD_HASH =
+  '$2b$10$pc5ichA4y.aIKOTsp5NSIetpFb/dUopIwUpuKS3DAT02jI9qECSpm';
 
 @Injectable()
 export class UserService {
@@ -26,6 +40,7 @@ export class UserService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private jwtService: JwtService,
     private tokenBlacklistService: TokenBlacklistService,
+    private loginAttemptService: LoginAttemptService,
   ) {}
 
   /**
@@ -86,33 +101,49 @@ export class UserService {
   }
 
   /**
-   * 用户登录
-   * @param loginDto 登录 DTO,包含邮箱和密码
+   * 用户登录（P0-5）
+   *
+   * 安全语义：
+   * - 锁的粒度是 (邮箱, 来源 IP)，且只在来源可信时生效 —— 陌生人无法再锁死
+   *   真实用户的账号；
+   * - 「邮箱不存在」与「密码错误」返回完全一致的文案，并对不存在的邮箱也跑一次
+   *   bcrypt 比对，抹平时序差异，避免账号枚举；
+   * - 登录成功即清空该邮箱的失败记录，并复位历史遗留的账号级锁定字段。
+   *
+   * @param loginDto 登录 DTO，包含邮箱和密码
+   * @param clientIp 客户端 IP（未配置 TRUST_PROXY 时即 socket 地址）
    * @returns 包含 JWT token 和用户信息的对象
-   * @throws BadRequestException 当用户不存在、密码错误或账户被锁定时抛出
+   * @throws BadRequestException 当凭据错误、该来源被暂时锁定或账号为 OAuth 注册时抛出
    */
-  async login(loginDto: LoginDto) {
+  async login(loginDto: LoginDto, clientIp?: string) {
     try {
       this.logger.log(`用户尝试登录: ${loginDto.email}`);
 
       const { email, password } = loginDto;
-      const user = await this.userModel.findOne({ email }).exec();
-      if (!user) {
-        this.logger.warn(`登录失败: 用户不存在 - ${email}`);
-        throw new BadRequestException('用户不存在或密码错误');
-      }
 
-      // 检查账户是否被锁定
-      if (user.lockedUntil && user.lockedUntil > new Date()) {
-        const remainingTime = Math.ceil(
-          (user.lockedUntil.getTime() - Date.now()) / 1000 / 60,
+      const lockStatus = await this.loginAttemptService.checkLocked(
+        email,
+        clientIp,
+      );
+      if (lockStatus.locked) {
+        const remainingMinutes = Math.max(
+          1,
+          Math.ceil(lockStatus.remainingMs / 60000),
         );
         this.logger.warn(
-          `登录失败: 账户已锁定 - ${email}, 剩余 ${remainingTime} 分钟`,
+          `登录被拒: 该来源失败次数过多 - ${email}, 剩余 ${remainingMinutes} 分钟`,
         );
         throw new BadRequestException(
-          `账户已被锁定,请 ${remainingTime} 分钟后再试`,
+          `登录失败次数过多，请 ${remainingMinutes} 分钟后再试`,
         );
+      }
+
+      const user = await this.userModel.findOne({ email }).exec();
+      if (!user) {
+        // 统一文案 + 等价耗时，避免把「邮箱是否注册」暴露出去
+        await this.consumeDummyCompare(password);
+        await this.recordLoginFailure(email, clientIp);
+        throw new BadRequestException(LOGIN_FAILED_MESSAGE);
       }
 
       // OAuth 注册用户未设置密码，无法通过邮箱+密码方式登录
@@ -125,29 +156,12 @@ export class UserService {
 
       const passwordMatch = await bcrypt.compare(password, user.password);
       if (!passwordMatch) {
-        // 增加登录失败次数
-        user.loginAttempts = (user.loginAttempts || 0) + 1;
-
-        // 如果失败次数达到5次,锁定账户30分钟
-        if (user.loginAttempts >= 5) {
-          user.lockedUntil = new Date(Date.now() + 30 * 60 * 1000); // 30分钟
-          await user.save();
-          this.logger.warn(
-            `登录失败: 账户被锁定 - ${email}, 失败次数: ${user.loginAttempts}`,
-          );
-          throw new BadRequestException('登录失败次数过多,账户已被锁定30分钟');
-        }
-
-        await user.save();
-        this.logger.warn(
-          `登录失败: 密码错误 - ${email}, 失败次数: ${user.loginAttempts}`,
-        );
-        throw new BadRequestException(
-          `用户不存在或密码错误,剩余尝试次数: ${5 - user.loginAttempts}`,
-        );
+        await this.recordLoginFailure(email, clientIp);
+        throw new BadRequestException(LOGIN_FAILED_MESSAGE);
       }
 
-      // 登录成功,重置失败次数和锁定时间
+      // 登录成功：清空失败记录，并复位历史遗留的账号级锁定字段
+      await this.loginAttemptService.clear(email);
       if (user.loginAttempts > 0 || user.lockedUntil) {
         user.loginAttempts = 0;
         user.lockedUntil = undefined;
@@ -171,6 +185,38 @@ export class UserService {
         (error as Error).stack,
       );
       throw error;
+    }
+  }
+
+  /**
+   * 记录一次登录失败，并按失败次数追加一个小延迟
+   *
+   * 延迟只出现在失败响应上，正确密码的登录永远不会被拖慢。
+   */
+  private async recordLoginFailure(
+    email: string,
+    clientIp?: string,
+  ): Promise<void> {
+    const result = await this.loginAttemptService.recordFailure(
+      email,
+      clientIp,
+    );
+    this.logger.warn(
+      `登录失败: 凭据错误 - ${email}, 该来源累计失败 ${result.failures} 次`,
+    );
+    if (result.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, result.delayMs));
+    }
+  }
+
+  /**
+   * 对不存在的邮箱执行一次等价耗时的 bcrypt 比对（防时序侧信道）
+   */
+  private async consumeDummyCompare(password: string): Promise<void> {
+    try {
+      await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+    } catch {
+      // 比对本身失败不影响流程，这里只为抹平耗时
     }
   }
 

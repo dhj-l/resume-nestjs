@@ -56,14 +56,17 @@ export class UserController {
   }
 
   /**
-   * 用户登录（速率限制：60 秒内最多 5 次，防暴力破解）
+   * 用户登录（速率限制：每个来源 60 秒内最多 10 次，防暴力破解）
    * @param loginDto 登录 DTO
+   * @param req 请求对象，用于取客户端 IP
    * @returns 包含 JWT token 和用户信息的对象
    */
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('login')
-  async login(@Body() loginDto: LoginDto) {
-    return this.userService.login(loginDto);
+  async login(@Body() loginDto: LoginDto, @Req() req: Request) {
+    // 传入客户端 IP：失败计数与临时锁定按 (邮箱, 来源) 粒度生效，
+    // 这样陌生人无法通过反复输错密码锁死某个真实用户的账号。
+    return this.userService.login(loginDto, req.ip);
   }
 
   @UseGuards(JwtAuthGuard)
