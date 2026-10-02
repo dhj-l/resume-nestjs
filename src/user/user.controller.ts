@@ -12,10 +12,12 @@ import {
   Query,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard, isAdminEmail } from '../auth/guards/admin.guard';
 import { LoginDto } from './dto/login-dto';
 import type { Request } from 'express';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -30,7 +32,18 @@ type RequestWithUser = Request & {
 
 @Controller('user')
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly config: ConfigService,
+  ) {}
+
+  /** 当前请求者是否为管理员（ADMIN_EMAILS 白名单） */
+  private isAdmin(req: RequestWithUser): boolean {
+    return isAdminEmail(
+      req.user?.email,
+      this.config.get<string>('ADMIN_EMAILS'),
+    );
+  }
 
   /**
    * 创建新用户
@@ -65,11 +78,11 @@ export class UserController {
 
   /**
    * 获取所有用户列表(支持分页、搜索、筛选)
-   * TODO: 当角色系统完善后添加 AdminGuard 限制仅管理员可访问
+   * 管理员专属：普通用户只能看自己的 profile，不允许枚举全站用户
    * @param query 查询参数（page, pageSize, keyword, createdVia）
-   * @returns 分页用户列表
+   * @returns 分页用户列表（已脱敏，不含密码与 OAuth 令牌）
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Get()
   async findAll(@Query() query: QueryUserDto) {
     return this.userService.findAll(query);
@@ -118,7 +131,7 @@ export class UserController {
   ) {
     const { userId } = req.user;
     // 检查是否为管理员或修改自己的信息
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = this.isAdmin(req);
     if (!isAdmin && userId !== id) {
       throw new ForbiddenException('没有权限修改该用户信息');
     }
@@ -136,7 +149,7 @@ export class UserController {
   async remove(@Param('id') id: string, @Req() req: RequestWithUser) {
     const { userId } = req.user;
     // 检查是否为管理员或删除自己的账户
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = this.isAdmin(req);
     if (!isAdmin && userId !== id) {
       throw new ForbiddenException('没有权限删除该用户');
     }
@@ -184,7 +197,7 @@ export class UserController {
   async findOne(@Param('id') id: string, @Req() req: RequestWithUser) {
     const { userId } = req.user;
     // 检查是否为管理员或查看自己的信息
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = this.isAdmin(req);
     if (!isAdmin && userId !== id) {
       throw new ForbiddenException('没有权限查看该用户信息');
     }

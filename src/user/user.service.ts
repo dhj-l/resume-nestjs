@@ -14,6 +14,7 @@ import { User, UserDocument } from './entities/user.entity';
 import { LoginDto } from './dto/login-dto';
 import { JwtService } from '@nestjs/jwt';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { sanitizeOAuthUser } from '../common/oauth/sanitize-user.util';
 import { TokenBlacklistService } from '../auth/token-blacklist.service';
 import { QueryUserDto } from './dto/query-user.dto';
 
@@ -26,6 +27,22 @@ export class UserService {
     private jwtService: JwtService,
     private tokenBlacklistService: TokenBlacklistService,
   ) {}
+
+  /**
+   * 把用户文档转成「可安全返回给客户端」的形状（P0-3）
+   *
+   * 复用 OAuth 回调既有的脱敏工具：剥离 password 与
+   * oauthProviders[].accessToken / refreshToken / tokenExpiresAt，
+   * 但保留 platform / platformUserId / nickname / avatarUrl / profileUrl，
+   * 以免打断前端「账号绑定」页的展示。
+   *
+   * 返回类型刻意保持 User，使所有调用方与既有类型契约不变。
+   */
+  private toSafeUser(user: unknown): User {
+    return sanitizeOAuthUser(
+      user as Record<string, unknown>,
+    ) as unknown as User;
+  }
 
   /**
    * 创建新用户
@@ -56,10 +73,9 @@ export class UserService {
         ...createUserDto,
         password: hashedPassword,
       });
-      Reflect.deleteProperty(createdUser, 'password');
 
       this.logger.log(`用户创建成功: ${createdUser.email}`);
-      return createdUser;
+      return this.toSafeUser(createdUser);
     } catch (error) {
       this.logger.error(
         `创建用户失败: ${(error as Error).message}`,
@@ -144,14 +160,10 @@ export class UserService {
         email: user.email,
       });
 
-      // Convert to plain object and remove password before returning
-      const userObject = user.toObject();
-      Reflect.deleteProperty(userObject, 'password');
-
       this.logger.log(`用户登录成功: ${email}`);
       return {
         token,
-        user: userObject,
+        user: this.toSafeUser(user),
       };
     } catch (error) {
       this.logger.error(
@@ -236,7 +248,12 @@ export class UserService {
       this.userModel.countDocuments(filter).exec(),
     ]);
 
-    return { items, total, page, pageSize };
+    return {
+      items: items.map((item) => this.toSafeUser(item)),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   /**
@@ -280,7 +297,7 @@ export class UserService {
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
-    return user;
+    return this.toSafeUser(user);
   }
 
   /**
@@ -324,7 +341,7 @@ export class UserService {
       }
 
       this.logger.log(`用户更新成功: ${id}`);
-      return updatedUser;
+      return this.toSafeUser(updatedUser);
     } catch (error) {
       this.logger.error(
         `更新用户失败: ${(error as Error).message}`,
@@ -351,7 +368,7 @@ export class UserService {
       }
 
       this.logger.log(`用户删除成功: ${id}`);
-      return deletedUser;
+      return this.toSafeUser(deletedUser);
     } catch (error) {
       this.logger.error(
         `删除用户失败: ${(error as Error).message}`,
@@ -399,7 +416,7 @@ export class UserService {
       }
 
       this.logger.log(`用户资料更新成功: ${userId}`);
-      return updated;
+      return this.toSafeUser(updated);
     } catch (error) {
       this.logger.error(
         `更新用户资料失败: ${(error as Error).message}`,
