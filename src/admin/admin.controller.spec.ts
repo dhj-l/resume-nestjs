@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 
@@ -14,6 +15,8 @@ describe('AdminController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AdminController],
       providers: [
+        // AdminGuard 依赖 ConfigService（管理端接口鉴权），单测里给一个 stub
+        { provide: ConfigService, useValue: { get: jest.fn() } },
         {
           provide: AdminService,
           useValue: mockAdminService,
