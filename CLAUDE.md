@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **AI**: DeepSeek API (LangChain 封装), 简历分析与优化
 - **PDF 生成**: Puppeteer
 - **文件上传**: Multer (支持图片/PDF/DOC/DOCX, 最大 10MB)
-- **安全**: Helmet, 全局速率限制 (单 IP 每 60s 最多 30 次), CORS 白名单
+- **安全**: Helmet, 全局限流（按已登录 userId / 未登录 IP 计数，默认每路由 120 次/60s，可用 `THROTTLE_*` 调整）, 管理员邮箱白名单（`ADMIN_EMAILS` + `AdminGuard`）, CORS 白名单
 - **包管理**: pnpm, 无 workspace
 
 ## 常用命令
@@ -58,8 +58,11 @@ pnpm test:cov           # 测试覆盖率报告
 | `ResumeAiModule` | `src/resume-ai/` | AI 简历分析、优化、编辑记录、用量追踪，依赖 AiModule |
 | `AiModule` | `src/ai/` | DeepSeek API 封装（LangChain），纯服务层 |
 | `TemplateModule` | `src/template/` | 简历模板管理 |
-| `UploadModule` | `src/common/upload/` | 文件上传（Multer 磁盘存储），依赖 ResumeAiModule |
-| 通用设施 | `src/common/` | 全局异常过滤器、响应拦截器、工具函数 |
+| `UploadModule` | `src/common/upload/` | 文件上传（Multer 磁盘存储 + MIME/魔数校验），依赖 ResumeAiModule |
+| `AdminModule` | `src/admin/` | 管理端仪表盘统计，需 AdminGuard |
+| `InterviewModule` | `src/interview/` | 模拟面试（大纲/出题/评价报告/反问/TTS+ASR），依赖 AiModule |
+| OAuth 模块 | `src/{gitee,github,qq}-auth/` | 三方登录，共用 `src/common/oauth/` 基类 |
+| 通用设施 | `src/common/` | 全局异常过滤器、响应/日志拦截器、限流守卫、上传校验、工具函数 |
 
 ### 模块依赖关系图
 
@@ -69,17 +72,23 @@ AppModule
  ├── ResumeModule ────→ ResumeAiModule ──→ AiModule
  ├── TemplateModule ──→ ResumeModule
  ├── UploadModule ────→ ResumeAiModule
- ├── AuthModule (JWT 策略 + 黑名单)
+ ├── AdminModule / InterviewModule
+ ├── GiteeAuth / GitHubAuth / QQAuth ──→ common/oauth 基类
+ ├── AuthModule (JWT 策略 + 黑名单 + AdminGuard)
  └── AiModule (DeepSeek LangChain 封装)
 ```
 
 ### 关键设计约定
 
 - **DTO 校验**: 所有入参使用 `class-validator` 装饰器，全局 `ValidationPipe` 启用 `whitelist: true`
-- **环境变量**: 通过 `ConfigService` 读取，`.env.example` 记录所需变量（PORT, MONGODB_URI, JWT_SECRET, DEEPSEEK_API_KEY, CORS_ORIGINS）
+- **环境变量**: 通过 `ConfigService` 读取，`.env.example` 与 `DEPLOYMENT.md` 记录所需变量（含 `ADMIN_EMAILS`、`TRUST_PROXY`、`THROTTLE_*`、`CORS_ORIGINS`、`LOG_LEVEL`）
+- **管理员鉴权**: `/api/v1/admin/**` 与 `GET /api/v1/user` 由 `AdminGuard` 保护，管理员身份来自 `ADMIN_EMAILS` 白名单；未配置时一律 403（fail closed）
+- **全局限流**: `UserThrottlerGuard`（`APP_GUARD`）按「已登录 userId / 未登录 IP」在每个路由上计数，额度由 `THROTTLE_LIMIT` / `THROTTLE_TTL_MS` 配置
+- **登录保护**: 失败计数按 (邮箱, 来源 IP) 粒度记录（`loginattempts` 集合，TTL 自清），不存在账号级硬锁定；失败文案统一为「邮箱或密码错误」以防账号枚举
+- **用户数据脱敏**: 所有返回用户对象的接口统一走 `sanitizeOAuthUser()`，剥离 `password` 与 OAuth 令牌，保留平台/昵称/头像等展示字段
 - **AI 用量追踪**: `ResumeAiModule` 记录每次 AI 调用（`AiUsageRecord`），支持成本核算
 - **Token 黑名单**: 用户登出时将 JWT 加入黑名单，`JwtStrategy` 验证时检查黑名单
-- **文件上传**: Multer 磁盘存储到 `uploads/`，通过 `/uploads/` 路径静态访问
+- **文件上传**: Multer 磁盘存储到 `uploads/`，落盘扩展名由声明 MIME 白名单推导（不使用 `originalname`），落盘后按魔数校验内容
 
 ### 部署
 
@@ -129,4 +138,4 @@ AppModule
 
 4. **Token 黑名单登出** — 用户登出时 Token 写入黑名单集合（`TokenBlacklist`），`JwtStrategy` 验证时检查黑名单，而非依赖 Token 自然过期。
 
-5. **文件上传为磁盘存储** — Multer 直接写入项目根 `uploads/` 目录，通过 `/uploads/` 路径静态托管。生产环境需注意无服务器平台（如 Vercel）不支持持久化文件存储。
+5. **文件上传为磁盘存储** — Multer 直接写入项目根 `uploads/` 目录，通过 `/uploads/` 路径静态托管。生产环境需注意无服务器平台（如 Vercel）不支持持久化文件存储。落盘扩展名必须由声明 MIME 白名单推导，并做魔数校验，禁止使用 `originalname`（否则可在公开静态目录写入 `.html` 造成同源 XSS）。

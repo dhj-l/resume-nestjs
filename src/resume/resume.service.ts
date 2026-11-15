@@ -2,10 +2,11 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
-  OnModuleInit,
   OnModuleDestroy,
   Logger,
+  Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { UpdateResumeDto } from './dto/update-resume.dto';
 import { DownloadResumeDto } from './dto/download-resume.dto';
 import { CreateResumeDto } from './dto/create-resume.dto';
@@ -20,10 +21,10 @@ import { ResumeEditRecord } from '../resume-ai/entities/resume-edit-record.entit
 import { ResumeAnalysisRecord } from '../resume-ai/entities/resume-analysis-record.entity';
 import { Model, Types } from 'mongoose';
 import puppeteer from 'puppeteer';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync } from 'fs';
 import { GetResumeDto } from './dto/get-resume.dto';
 import { AdminQueryResumeDto } from './dto/admin-query-resume.dto';
+import { buildModuleSortUpdate } from './utils/module-sort.util';
 
 type SortableItem = {
   globalSort?: number;
@@ -31,9 +32,8 @@ type SortableItem = {
 };
 
 @Injectable()
-export class ResumeService implements OnModuleInit, OnModuleDestroy {
+export class ResumeService implements OnModuleDestroy {
   private readonly logger = new Logger(ResumeService.name);
-  private tailwindScript: string;
 
   /** 复用的浏览器实例（应用级单例），避免每次生成 PDF 都创建新进程 */
   private browser: any = null;
@@ -48,25 +48,46 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
     private editRecordModel: Model<ResumeEditRecord>,
     @InjectModel(ResumeAnalysisRecord.name)
     private analysisRecordModel: Model<ResumeAnalysisRecord>,
+    @Optional() private readonly configService?: ConfigService,
   ) {}
 
-  onModuleInit() {
-    try {
-      // 在开发环境和生产环境中，__dirname 分别指向 src/resume 和 dist/src/resume
-      // 我们需要向上一级找到 dist 目录，然后访问 assets 文件夹
-      const tailwindPath = join(
-        __dirname,
-        '..',
-        '..',
-        'assets',
-        'tailwind.browser.js',
-      );
-      this.tailwindScript = readFileSync(tailwindPath, 'utf-8');
-      this.logger.log('Tailwind CSS 脚本加载成功');
-    } catch (error) {
-      this.logger.error('加载 Tailwind CSS 脚本失败', (error as Error).stack);
-      throw new Error('初始化失败：无法加载 Tailwind CSS 脚本');
+  /**
+   * 解析 Puppeteer 使用的 Chrome/Chromium 可执行文件路径。
+   *
+   * 优先使用配置中的 PUPPETEER_EXECUTABLE_PATH（Docker 等部署已设置），
+   * 其次尝试常见系统 Chrome/Chromium 安装路径，避免 Puppeteer 因为找不到
+   * 对应版本的缓存浏览器而启动失败。
+   */
+  private resolvePuppeteerExecutablePath(): string | undefined {
+    const configured = this.configService?.get<string>(
+      'PUPPETEER_EXECUTABLE_PATH',
+    );
+    if (configured) {
+      return configured;
     }
+
+    const candidates =
+      process.platform === 'win32'
+        ? [
+            'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+          ]
+        : process.platform === 'darwin'
+          ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+          : [
+              '/usr/bin/chromium-browser',
+              '/usr/bin/google-chrome',
+              '/usr/bin/google-chrome-stable',
+              '/usr/bin/chromium',
+            ];
+
+    for (const candidate of candidates) {
+      if (typeof existsSync === 'function' && existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    return undefined;
   }
 
   /**
@@ -90,8 +111,10 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
     this.browserInitPromise = (async () => {
       try {
         this.logger.log('启动浏览器实例（首次创建或断开后重建）');
+        const executablePath = this.resolvePuppeteerExecutablePath();
         const newBrowser = await puppeteer.launch({
           headless: true,
+          ...(executablePath ? { executablePath } : {}),
           args: ['--no-sandbox', '--disable-setuid-sandbox'],
         });
 
@@ -195,13 +218,54 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * 将文档转为普通对象（兼容 lean 结果与 mongoose 文档）
+   */
+  private toPlainResume(resume: any): Record<string, any> {
+    return typeof resume?.toObject === 'function'
+      ? resume.toObject()
+      : { ...(resume ?? {}) };
+  }
+
+  /**
+   * 模块排序冲突兜底修复
+   *
+   * 客户端/AI 提交的模块 globalSort 可能重复或缺失（落库被 schema default
+   * 补成 0），而前端"交换式排序"对相等值是空操作，会导致模块无法排序。
+   * 仅在检出冲突时按相对顺序重编为唯一值（1..n），正常唯一时不做任何写回。
+   */
+  private async repairModuleSortIfConflicted(
+    resume: ResumeDocument,
+  ): Promise<ResumeDocument> {
+    const repair = buildModuleSortUpdate(this.toPlainResume(resume), {
+      onlyOnConflict: true,
+    });
+    if (!Object.keys(repair).length) {
+      return resume;
+    }
+
+    this.logger.warn(
+      `简历 ${resume._id} 模块排序字段存在重复或缺失，已按相对顺序自动修复`,
+    );
+    const repaired = await this.resumeModel.findByIdAndUpdate(
+      resume._id,
+      { $set: repair },
+      { new: true },
+    );
+    return repaired ?? resume;
+  }
+
   private getContent(html: string, css: string) {
+    // 前端传来的 css 已自包含全部所需样式（构建时编译的 Tailwind 产物）。
+    // 禁止在此注入 @tailwindcss/browser 等运行时：v4 运行时会注册
+    // @property --tw-gradient-from/to { syntax: "<color>" }，前端 Tailwind 3
+    // 的渐变变量声明（颜色 + 位置两个 token）无法通过校验，会被静默回退成
+    // 透明色，导致导出 PDF 的渐变背景全部消失。
     return `
         <!DOCTYPE html>
         <html>
           <head>
             <meta charset="UTF-8">
-            <script>${this.tailwindScript}</script>
             <style>
               html, body {
                 margin: 0;
@@ -368,7 +432,7 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `用户 ${userId} 基于模板 ${templateId} 成功创建简历: ${newResume._id.toString()}`,
       );
-      return newResume;
+      return await this.repairModuleSortIfConflicted(newResume);
     }
 
     // 创建空白简历
@@ -386,7 +450,7 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(
       `用户 ${userId} 成功创建空白简历: ${newResume._id.toString()}`,
     );
-    return newResume;
+    return await this.repairModuleSortIfConflicted(newResume);
   }
   /**
    * 查找所有模板简历
@@ -424,6 +488,7 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
           'title',
           'cover',
           'isTemplate',
+          'aiStatus',
           'createdAt',
           'updatedAt',
         ])
@@ -505,10 +570,21 @@ export class ResumeService implements OnModuleInit, OnModuleDestroy {
 
     const enrichedDto = this.enrichWithSortFields(updateResumeDto);
 
+    // 合并"库中现值 + 本次提交值"后仅在检出模块级排序冲突时兜底重编号：
+    // 前端正常换序写回的是唯一值，此分支不会触发，保证幂等
+    const merged = { ...this.toPlainResume(resume), ...enrichedDto };
+    const sortRepair = buildModuleSortUpdate(merged, { onlyOnConflict: true });
+    if (Object.keys(sortRepair).length) {
+      this.logger.warn(
+        `用户 ${userId} 更新的简历 ${id} 模块排序字段存在重复或缺失，已按相对顺序自动修复`,
+      );
+    }
+
     const updatedResume = await this.resumeModel.findByIdAndUpdate(
       id,
       {
         ...enrichedDto,
+        ...sortRepair,
         updatedAt: new Date(),
       },
       {

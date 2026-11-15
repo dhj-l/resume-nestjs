@@ -1,11 +1,4 @@
-import {
-  IsOptional,
-  IsString,
-  IsInt,
-  Min,
-  Max,
-  MaxLength,
-} from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class TemplateQueryDto {
   /**

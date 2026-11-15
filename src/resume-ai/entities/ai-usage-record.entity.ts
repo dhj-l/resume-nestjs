@@ -12,6 +12,8 @@ export enum AiFunctionEnum {
   ResumeAnalysis = 'resume_analysis',
   /** AI智能导入简历 */
   SmartImport = 'smart_import',
+  /** AI面试押题 */
+  InterviewQuestionPrediction = 'interview_question_prediction',
 }
 
 @Schema({ timestamps: true })

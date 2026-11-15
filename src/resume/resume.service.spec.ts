@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException } from '@nestjs/common';
 import { ResumeService } from './resume.service';
-import { readFileSync } from 'fs';
 
 /* ------------------------------------------------------------------ */
 /*  Puppeteer mock                                                    */
@@ -49,7 +48,7 @@ jest.mock('puppeteer', () => ({
 }));
 
 jest.mock('fs', () => ({
-  readFileSync: jest.fn().mockReturnValue('/* mock tailwind css */'),
+  existsSync: jest.fn().mockReturnValue(false),
 }));
 
 /* ------------------------------------------------------------------ */
@@ -96,7 +95,7 @@ describe('ResumeService — Puppeteer 浏览器生命周期', () => {
   let puppeteer: any;
 
   beforeAll(async () => {
-    puppeteer = require('puppeteer');
+    puppeteer = require('puppeteer'); // eslint-disable-line @typescript-eslint/no-require-imports
   });
 
   beforeEach(async () => {
@@ -261,6 +260,19 @@ describe('ResumeService — Puppeteer 浏览器生命周期', () => {
 
       expect(Buffer.isBuffer(result)).toBe(true);
       expect(result.toString()).toBe('fake-pdf-content');
+    });
+
+    it('导出页应包含前端 html/css 且不注入 Tailwind 运行时脚本', async () => {
+      await callDownload();
+
+      expect(mockPage.setContent).toHaveBeenCalledTimes(1);
+      const content = mockPage.setContent.mock.calls[0][0] as string;
+      // 前端传来的样式自包含（构建时编译的 Tailwind 产物），应原样保留
+      expect(content).toContain('body { margin: 0; }');
+      expect(content).toContain('<div>test</div>');
+      // 注入 @tailwindcss/browser 运行时会注册类型化 @property，
+      // 导致前端渐变声明回退为透明色（背景丢失）
+      expect(content).not.toContain('<script');
     });
 
     it('page.pdf 出错时应在 finally 中关闭页面', async () => {
@@ -669,6 +681,244 @@ describe('ResumeService — 管理员方法', () => {
       const result = await service.adminGetStats();
 
       expect(result.byType).toEqual({ default: 10 });
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  ResumeService — 用户简历列表 findAll                                */
+/* ------------------------------------------------------------------ */
+
+describe('ResumeService — 用户简历列表 findAll', () => {
+  let service: ResumeService;
+  let chainObj: any;
+
+  beforeEach(async () => {
+    chainObj = {
+      select: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+
+    const mockResumeModel = {
+      find: jest.fn().mockReturnValue(chainObj),
+      countDocuments: jest.fn().mockResolvedValue(2),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ResumeService,
+        { provide: getModelToken('Resume'), useValue: mockResumeModel },
+        { provide: getModelToken('Template'), useValue: buildMockModel() },
+        { provide: getModelToken('ResumeAi'), useValue: {} },
+        { provide: getModelToken('ResumeEditRecord'), useValue: {} },
+        { provide: getModelToken('ResumeAnalysisRecord'), useValue: {} },
+      ],
+    }).compile();
+
+    service = module.get<ResumeService>(ResumeService);
+  });
+
+  it('应返回分页列表并包含 aiStatus 字段', async () => {
+    const list = [
+      { _id: 'r1', title: '张三-前端', aiStatus: 'generating', userId: 'u1' },
+      { _id: 'r2', title: '李四-后端', aiStatus: '', userId: 'u1' },
+    ];
+    chainObj.exec.mockResolvedValue(list);
+
+    const result = await service.findAll('u1', { page: 1, pageSize: 6 });
+
+    expect(result.list).toEqual(list);
+    expect(result.total).toBe(2);
+    expect(chainObj.select).toHaveBeenCalledWith(
+      expect.arrayContaining(['aiStatus', '_id', 'title']),
+    );
+    expect(chainObj.skip).toHaveBeenCalledWith(0);
+    expect(chainObj.limit).toHaveBeenCalledWith(6);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  模块排序冲突修复（写边界兜底）                                     */
+/* ------------------------------------------------------------------ */
+
+describe('ResumeService — 模块排序冲突修复', () => {
+  const userId = '507f1f77bcf86cd799439011';
+  let service: ResumeService;
+  let mockResumeModel: any;
+
+  const buildService = async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ResumeService,
+        { provide: getModelToken('Resume'), useValue: mockResumeModel },
+        { provide: getModelToken('Template'), useValue: buildMockModel() },
+        { provide: getModelToken('ResumeAi'), useValue: {} },
+        { provide: getModelToken('ResumeEditRecord'), useValue: {} },
+        { provide: getModelToken('ResumeAnalysisRecord'), useValue: {} },
+      ],
+    }).compile();
+
+    service = module.get<ResumeService>(ResumeService);
+  };
+
+  beforeEach(async () => {
+    mockResumeModel = {
+      findOne: jest.fn(),
+      create: jest.fn(),
+      findByIdAndUpdate: jest.fn(),
+    };
+    await buildService();
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('update', () => {
+    it('库中模块 globalSort 重复时，保存载荷被归一化为唯一值', async () => {
+      const plainStored = {
+        _id: 'r1',
+        userId,
+        isTemplate: false,
+        educationBackground: [
+          { schoolName: 'E1', globalSort: 2, localSort: 1 },
+        ],
+        projectExperience: [
+          { title: 'P1', globalSort: 3, localSort: 1 },
+          { title: 'P2', globalSort: 3, localSort: 2 },
+        ],
+        internshipExperience: [
+          { companyName: 'I1', globalSort: 3, localSort: 1 },
+        ],
+      };
+      mockResumeModel.findOne.mockResolvedValue({
+        ...plainStored,
+        toObject: () => ({ ...plainStored }),
+      });
+      mockResumeModel.findByIdAndUpdate.mockResolvedValue(plainStored);
+
+      await service.update(
+        'r1',
+        {
+          internshipExperience: [
+            { companyName: 'I1', globalSort: 3, localSort: 1 },
+          ],
+        } as any,
+        userId,
+      );
+
+      expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        'r1',
+        {
+          internshipExperience: [
+            { companyName: 'I1', globalSort: 4, localSort: 1 },
+          ],
+          educationBackground: [
+            { schoolName: 'E1', globalSort: 2, localSort: 1 },
+          ],
+          projectExperience: [
+            { title: 'P1', globalSort: 3, localSort: 1 },
+            { title: 'P2', globalSort: 3, localSort: 2 },
+          ],
+          updatedAt: expect.any(Date),
+        },
+        { new: true },
+      );
+    });
+
+    it('排序值本已唯一时原样保存，不追加任何排序字段（幂等）', async () => {
+      const plainStored = {
+        _id: 'r1',
+        userId,
+        isTemplate: false,
+        workExperience: [{ companyName: 'W1', globalSort: 1, localSort: 1 }],
+        skills: { content: 'Vue3', globalSort: 6 },
+      };
+      mockResumeModel.findOne.mockResolvedValue({
+        ...plainStored,
+        toObject: () => ({ ...plainStored }),
+      });
+      mockResumeModel.findByIdAndUpdate.mockResolvedValue(plainStored);
+
+      await service.update(
+        'r1',
+        {
+          workExperience: [{ companyName: 'W2', globalSort: 2, localSort: 1 }],
+        } as any,
+        userId,
+      );
+
+      const payload = mockResumeModel.findByIdAndUpdate.mock.calls[0][1];
+      expect(Object.keys(payload).sort()).toEqual([
+        'updatedAt',
+        'workExperience',
+      ]);
+      expect(payload.workExperience).toEqual([
+        { companyName: 'W2', globalSort: 2, localSort: 1 },
+      ]);
+    });
+  });
+
+  describe('create', () => {
+    it('落库结果存在重复 globalSort 时补一次修复写回并返回修复后文档', async () => {
+      const plainCreated = {
+        _id: 'r-new',
+        educationBackground: [
+          { schoolName: 'E1', globalSort: 2, localSort: 1 },
+        ],
+        projectExperience: [{ title: 'P1', globalSort: 3, localSort: 1 }],
+        internshipExperience: [
+          { companyName: 'I1', globalSort: 3, localSort: 1 },
+        ],
+      };
+      mockResumeModel.create.mockResolvedValue({
+        ...plainCreated,
+        toObject: () => ({ ...plainCreated }),
+      });
+      mockResumeModel.findByIdAndUpdate.mockResolvedValue({
+        _id: 'r-new',
+        repaired: true,
+      });
+
+      const result = await service.create(userId, { title: 't' } as any);
+
+      expect(mockResumeModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        'r-new',
+        {
+          $set: {
+            educationBackground: [
+              { schoolName: 'E1', globalSort: 2, localSort: 1 },
+            ],
+            projectExperience: [{ title: 'P1', globalSort: 3, localSort: 1 }],
+            internshipExperience: [
+              { companyName: 'I1', globalSort: 4, localSort: 1 },
+            ],
+          },
+        },
+        { new: true },
+      );
+      expect(result).toEqual({ _id: 'r-new', repaired: true });
+    });
+
+    it('排序值唯一时不产生额外写回', async () => {
+      const plainCreated = {
+        _id: 'r-new',
+        workExperience: [{ companyName: 'W1', globalSort: 1, localSort: 1 }],
+        skills: { content: 'Vue3', globalSort: 6 },
+      };
+      const created = {
+        ...plainCreated,
+        toObject: () => ({ ...plainCreated }),
+      };
+      mockResumeModel.create.mockResolvedValue(created);
+
+      await expect(service.create(userId, { title: 't' } as any)).resolves.toBe(
+        created,
+      );
+      expect(mockResumeModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
   });
 });

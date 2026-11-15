@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   InternalServerErrorException,
   Logger,
@@ -14,8 +15,11 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { type Response } from 'express';
+import { Observable } from 'rxjs';
+import { ParseObjectIdPipe } from '@nestjs/mongoose';
 import { ResumeAiService } from './resume-ai.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { initSseResponse, writeSseEvent } from 'src/common/sse.utils';
 import { CreateAiResuemDto, ParserResumeDto } from './dto/createAiResuem.dto';
 import { SseMessage } from './types/sse.types';
 import { GetResumeRecordsDto } from 'src/resume-ai/dto/get-resume-record.dto';
@@ -25,6 +29,11 @@ import { AnalyzeResumeDto } from './dto/analyze-resume.dto';
 import { GetLatestAnalysisDto } from './dto/get-latest-analysis.dto';
 import { GetAnalysisDetailDto } from './dto/get-analysis-detail.dto';
 import { ExportAnalysisDto } from './dto/export-analysis.dto';
+import { PredictQuestionsDto } from './dto/predict-questions.dto';
+import {
+  GetQuestionDetailDto,
+  GetLatestQuestionDto,
+} from './dto/get-question-record.dto';
 
 @Controller('resume-ai')
 @UseGuards(JwtAuthGuard)
@@ -71,63 +80,62 @@ export class ResumeAiController {
     @Req() req: any,
     @Res() res: Response,
   ): void {
+    const { userId } = req.user;
+
+    // 先获取 SSE Observable：JD 校验失败等会同步抛错。
+    // 此时尚未设置 SSE 响应头，异常交由全局过滤器按标准 JSON 错误格式返回，
+    // 避免以 text/event-stream 头返回 JSON 错误体。
+    let sseObservable: Observable<SseMessage>;
     try {
-      const { userId } = req.user;
-
-      // 设置SSE响应头
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('X-Accel-Buffering', 'no');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-
-      // 获取SSE Observable
-      const sseObservable = this.resumeAiService.generateResumeSse(
+      sseObservable = this.resumeAiService.generateResumeSse(
         createAiResuemDto,
         userId,
       );
-
-      // 订阅SSE消息流
-      const subscription = sseObservable.subscribe({
-        next: (message: SseMessage) => {
-          // 将SSE消息格式化为SSE格式
-          const sseData = `data: ${JSON.stringify(message)}\n\n`;
-          res.write(sseData);
-        },
-        error: (error: Error) => {
-          this.logger.error('SSE错误', error.stack);
-          const errorMessage: SseMessage = {
-            type: 'error',
-            moduleName: 'system',
-            status: 'failed',
-            message: error.message || '连接错误',
-            totalModules: 0,
-            currentModule: 0,
-          };
-          res.write(`data: ${JSON.stringify(errorMessage)}\n\n`);
-          res.end();
-        },
-        complete: () => {
-          res.end();
-        },
-      });
-
-      // 处理客户端断开连接
-      req.on('close', () => {
-        subscription.unsubscribe();
-        res.end();
-      });
-
-      // 处理连接错误
-      req.on('error', (error: Error) => {
-        this.logger.error('连接错误', error.stack);
-        subscription.unsubscribe();
-        res.end();
-      });
     } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
       this.logger.error('SSE初始化错误', error.stack);
-      throw new BadRequestException(error.message);
+      throw new InternalServerErrorException('服务器内部错误');
     }
+
+    // 成功后再设置 SSE 响应头（CORS 由全局配置统一处理，不在此手动设置）
+    initSseResponse(res);
+
+    // 订阅SSE消息流
+    const subscription = sseObservable.subscribe({
+      next: (message: SseMessage) => {
+        writeSseEvent(res, message);
+      },
+      error: (error: Error) => {
+        this.logger.error('SSE错误', error.stack);
+        const errorMessage: SseMessage = {
+          type: 'error',
+          moduleName: 'system',
+          status: 'failed',
+          message: error.message || '连接错误',
+          totalModules: 0,
+          currentModule: 0,
+          resumeId: (error as any)?.resumeId,
+        };
+        writeSseEvent(res, errorMessage);
+        res.end();
+      },
+      complete: () => {
+        res.end();
+      },
+    });
+
+    // 处理客户端断开连接
+    req.on('close', () => {
+      subscription.unsubscribe();
+      res.end();
+    });
+
+    // 处理连接错误
+    req.on('error', (error: Error) => {
+      this.logger.error('连接错误', error.stack);
+      subscription.unsubscribe();
+      res.end();
+    });
   }
 
   /**
@@ -141,6 +149,24 @@ export class ResumeAiController {
     try {
       const { userId } = req.user;
       return await this.resumeAiService.getResumeRecords(userId, query);
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 删除简历生成记录（仅删除记录，不影响关联简历）
+   */
+  @Delete('records/:id')
+  async deleteResumeRecord(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.deleteResumeRecord(userId, id);
     } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(error.message, error.stack);
@@ -201,6 +227,8 @@ export class ResumeAiController {
     @Req() req: { user: { userId: string } },
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('status') status?: string,
+    @Query('keyword') keyword?: string,
   ) {
     try {
       const { userId } = req.user;
@@ -216,7 +244,27 @@ export class ResumeAiController {
         userId,
         validPage,
         validPageSize,
+        status,
+        keyword,
       );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 删除简历分析记录
+   */
+  @Delete('analysis-records/:id')
+  async deleteAnalysisRecord(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.deleteAnalysisRecord(userId, id);
     } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(error.message, error.stack);
@@ -254,6 +302,120 @@ export class ResumeAiController {
   ) {
     try {
       return await this.resumeAiService.getLatestAnalysisByResumeId(
+        dto.resumeId,
+        req.user.userId,
+      );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * AI面试押题
+   */
+  @Post('predict-questions')
+  async predictQuestions(
+    @Body() predictQuestionsDto: PredictQuestionsDto,
+    @Req() req,
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.predictInterviewQuestions(
+        predictQuestionsDto,
+        userId,
+      );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取押题记录列表（分页）
+   */
+  @Get('question-records')
+  async getQuestionRecords(
+    @Req() req: { user: { userId: string } },
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('status') status?: string,
+    @Query('keyword') keyword?: string,
+  ) {
+    try {
+      const { userId } = req.user;
+      const parsedPage = page ? parseInt(page, 10) : 1;
+      const parsedPageSize = pageSize ? parseInt(pageSize, 10) : 10;
+      const validPage =
+        Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+      const validPageSize =
+        Number.isNaN(parsedPageSize) || parsedPageSize < 1
+          ? 10
+          : Math.min(parsedPageSize, 100);
+      return await this.resumeAiService.getQuestionRecords(
+        userId,
+        validPage,
+        validPageSize,
+        status,
+        keyword,
+      );
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 删除 AI 押题记录
+   */
+  @Delete('question-records/:id')
+  async deleteQuestionRecord(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      const { userId } = req.user;
+      return await this.resumeAiService.deleteQuestionRecord(userId, id);
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取押题记录详情
+   */
+  @Get('question-detail')
+  async getQuestionDetail(
+    @Query() dto: GetQuestionDetailDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.resumeAiService.getQuestionDetailService(
+        dto.id,
+        req.user.userId,
+      );
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(error.message, error.stack);
+      throw new InternalServerErrorException('服务器内部错误');
+    }
+  }
+
+  /**
+   * 获取简历最近一次的押题记录
+   */
+  @Get('latest-questions')
+  async getLatestQuestions(
+    @Query() dto: GetLatestQuestionDto,
+    @Req() req: { user: { userId: string } },
+  ) {
+    try {
+      return await this.resumeAiService.getLatestQuestionsByResumeId(
         dto.resumeId,
         req.user.userId,
       );

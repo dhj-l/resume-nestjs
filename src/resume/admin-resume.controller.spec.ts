@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { AdminResumeController } from './admin-resume.controller';
 import { ResumeService } from './resume.service';
 import { NotFoundException } from '@nestjs/common';
@@ -18,6 +19,8 @@ describe('AdminResumeController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AdminResumeController],
       providers: [
+        // AdminGuard 依赖 ConfigService（管理端接口鉴权），单测里给一个 stub
+        { provide: ConfigService, useValue: { get: jest.fn() } },
         {
           provide: ResumeService,
           useValue: mockResumeService,

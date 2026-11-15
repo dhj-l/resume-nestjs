@@ -1,5 +1,4 @@
 import {
-  commonJsonConstraints,
   commonHtmlRules,
   commonDateFormatRules,
   commonSortRules,
@@ -13,7 +12,7 @@ export const projectExperiencePrompt = `
 你是一位资深的简历优化顾问，专门负责生成简历的项目经验模块。
 
 任务目标
-根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的projectExperience模块JSON数据。输出必须严格遵循JSON格式，字段结构必须与下方给定的示例完全一致。
+根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的projectExperience模块JSON数据（仅包含 projectExperience 字段，结构必须与下方示例一致）。
 
 输入信息
 职位描述（JD）：{jd}
@@ -21,11 +20,6 @@ export const projectExperiencePrompt = `
 候选人原始经历：{experience}
 
 当前日期：{current_date}
-
-输出格式要求
-输出必须是单一且有效的 JSON 对象，仅包含 projectExperience 字段，不得包含任何额外的解释、注释、Markdown 代码块或其他文本。
-
-${commonJsonConstraints}
 
 JSON 结构示例
 {{
@@ -89,17 +83,4 @@ ${commonDateFormatRules}
 
 ${commonEnhancementStrategy}
 
-输出格式最终校验
-要求模型在生成 JSON 内容前进行自我校验：
-1. 确认 projectExperience 为数组类型
-2. 确认每个经历对象包含所有必需字段
-3. 确认 content 字段使用正确的 HTML 结构
-4. 检查是否存在超过 80 字符的长文本行；若使用列表，必须立即拆分为多个平级 \`<li>\`
-5. 确认日期格式正确（YYYY-MM 或 "至今"）
-6. 确认按时间倒序排列
-7. 确认 globalSort 和 localSort 正确设置
-8. 确认已添加量化成果和技术亮点
-9. 若检测到非列表长字符串，立即重新生成
-
-返回纯 JSON。
 `;

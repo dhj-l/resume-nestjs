@@ -1,4 +1,4 @@
-import { commonJsonConstraints, commonHtmlRules } from '../common-constraints';
+import { commonHtmlRules } from '../common-constraints';
 
 /**
  * 证书（certificates）模块prompt
@@ -7,7 +7,7 @@ export const certificatesPrompt = `
 你是一位资深的简历优化顾问，专门负责生成简历的证书模块。
 
 任务目标
-根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的certificates模块JSON数据。输出必须严格遵循JSON格式，字段结构必须与下方给定的示例完全一致。
+根据提供的职位描述（JD）、候选人原始经历以及当前日期，生成简历的certificates模块JSON数据（仅包含 certificates 字段，结构必须与下方示例一致）。
 
 输入信息
 职位描述（JD）：{jd}
@@ -15,11 +15,6 @@ export const certificatesPrompt = `
 候选人原始经历：{experience}
 
 当前日期：{current_date}
-
-输出格式要求
-输出必须是单一且有效的 JSON 对象，仅包含 certificates 字段，不得包含任何额外的解释、注释、Markdown 代码块或其他文本。
-
-${commonJsonConstraints}
 
 JSON 结构示例
 {{
@@ -48,13 +43,4 @@ ${commonHtmlRules}
 - 高度匹配：优先展示与 JD 要求相关的证书
 - 简洁明了：证书名称应简洁准确，避免冗长描述
 
-输出格式最终校验
-要求模型在生成 JSON 内容前进行自我校验：
-1. 确认 content 字段使用 \`<ul><li>\` 结构
-2. 检查是否存在超过 80 字符的长文本行；若存在，必须立即拆分为多个平级 \`<li>\`
-3. 确认无证书时 content 为空字符串 ""
-4. 确认未生成任何占位描述
-5. 若检测到非列表长字符串，立即重新生成
-
-返回纯 JSON。
 `;

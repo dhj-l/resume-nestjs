@@ -7,7 +7,6 @@
  * 新的模块化prompt位于以下位置：
  *
  * 1. 公共约束：src/resume-ai/prompt/common-constraints.ts
- *    - commonJsonConstraints: JSON格式约束和错误处理机制
  *    - commonHtmlRules: HTML标签使用规范
  *    - commonDateFormatRules: 日期格式规范
  *    - commonSortRules: 排序字段规范
@@ -510,6 +509,11 @@ JSON 格式约束
 - 输出前后/外部不得有任何文字、空白、Markdown 标记或注释
 - 特殊字符正确转义：双引号→\\"，反斜杠→\\\\，换行→\\n
 - JSON 必须可通过 JSON.parse() 解析，缺少必需字段或类型不正确时重新生成
+
+【禁止返回空】
+- 在任何情况下都必须返回有效的 JSON 对象，严禁返回空字符串或非 JSON 内容
+- 即使无法从输入中提取任何有效信息，也必须返回结构完整的 JSON 骨架
+- 如果遇到技术问题导致无法正常输出 JSON，请重试直到生成出合法的 JSON
 
 返回纯 JSON。
 `;

@@ -10,12 +10,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { AiUsageRecordService } from './ai-usage-record.service';
 import { QueryAiUsageRecordDto } from './dto/query-ai-usage-record.dto';
 
-// TODO: 当角色系统引入后，添加 AdminGuard 限制仅管理员可访问
+// 鉴权：JwtAuthGuard（登录）+ AdminGuard（ADMIN_EMAILS 白名单）
 @Controller('admin/ai-usage-records')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 export class AiUsageRecordController {
   private readonly logger = new Logger(AiUsageRecordController.name);
 

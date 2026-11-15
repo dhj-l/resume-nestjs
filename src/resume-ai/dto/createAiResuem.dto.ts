@@ -1,4 +1,11 @@
-import { IsEnum, IsNotEmpty, IsString, ValidateIf } from 'class-validator';
+import {
+  IsArray,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  ValidateIf,
+} from 'class-validator';
 import { DetailInfo, ResumeAiTypeEnum } from '../entities/resume-ai.entity';
 
 export class CreateAiResuemDto {
@@ -44,6 +51,14 @@ export class CreateAiResuemDto {
   @IsString()
   @IsNotEmpty()
   resumeId?: string;
+
+  /**
+   * 需要生成的模块 key 列表（缺省或空数组 = 全部模块）
+   */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  modules?: string[];
 }
 
 export class ParserResumeDto {

@@ -76,14 +76,12 @@ describe('AdminService', () => {
       }));
 
       // AI 用量统计
-      mockAiUsageRecordModel.countDocuments = makeCountDocs(
-        (filter?: any) => {
-          if (!filter || Object.keys(filter).length === 0) return 500;
-          if (filter?.createdAt?.$gte) return 12;
-          if (filter?.success === true) return 460;
-          return 0;
-        },
-      );
+      mockAiUsageRecordModel.countDocuments = makeCountDocs((filter?: any) => {
+        if (!filter || Object.keys(filter).length === 0) return 500;
+        if (filter?.createdAt?.$gte) return 12;
+        if (filter?.success === true) return 460;
+        return 0;
+      });
 
       const result = await service.getDashboard();
 
@@ -118,13 +116,11 @@ describe('AdminService', () => {
       mockResumeModel.countDocuments = tenFn;
       const fiveFn = jest.fn(() => ({ exec: jest.fn().mockResolvedValue(5) }));
       mockTemplateModel.countDocuments = fiveFn;
-      mockAiUsageRecordModel.countDocuments = makeCountDocs(
-        (filter?: any) => {
-          if (filter?.success === true) return 100;
-          if (filter?.createdAt?.$gte) return 5;
-          return 100;
-        },
-      );
+      mockAiUsageRecordModel.countDocuments = makeCountDocs((filter?: any) => {
+        if (filter?.success === true) return 100;
+        if (filter?.createdAt?.$gte) return 5;
+        return 100;
+      });
 
       const result = await service.getDashboard();
 
@@ -137,13 +133,11 @@ describe('AdminService', () => {
       mockResumeModel.countDocuments = tenFn;
       const fiveFn = jest.fn(() => ({ exec: jest.fn().mockResolvedValue(5) }));
       mockTemplateModel.countDocuments = fiveFn;
-      mockAiUsageRecordModel.countDocuments = makeCountDocs(
-        (filter?: any) => {
-          if (filter?.success === true) return 0;
-          if (filter?.createdAt?.$gte) return 3;
-          return 100;
-        },
-      );
+      mockAiUsageRecordModel.countDocuments = makeCountDocs((filter?: any) => {
+        if (filter?.success === true) return 0;
+        if (filter?.createdAt?.$gte) return 3;
+        return 100;
+      });
 
       const result = await service.getDashboard();
 

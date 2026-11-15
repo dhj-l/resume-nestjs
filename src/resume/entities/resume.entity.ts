@@ -532,6 +532,12 @@ export class Resume {
    */
   @Prop({ default: 'default', index: true })
   type: string;
+
+  /**
+   * AI 生成状态：空串（普通简历）/ generating（AI 生成中）/ completed / failed
+   */
+  @Prop({ default: '' })
+  aiStatus?: string;
 }
 
 export const ResumeSchema = SchemaFactory.createForClass(Resume);
