@@ -829,6 +829,73 @@ describe('ResumeService — 模块排序冲突修复', () => {
       );
     });
 
+    it('对象模块同时出现在提交数据与排序修复载荷时，折叠为对象字段而非点号键', async () => {
+      // 复现线上报错：库中 workExperience 与 selfEvaluation 的 globalSort 重复，
+      // 修复载荷含 'selfEvaluation.globalSort'，与提交的 selfEvaluation 对象
+      // 同时写入时 MongoDB 抛出路径冲突（would create a conflict）
+      const plainStored = {
+        _id: 'r1',
+        userId,
+        isTemplate: false,
+        workExperience: [{ companyName: 'W1', globalSort: 1, localSort: 1 }],
+        selfEvaluation: { content: '旧内容', globalSort: 1 },
+      };
+      mockResumeModel.findOne.mockResolvedValue({
+        ...plainStored,
+        toObject: () => ({ ...plainStored }),
+      });
+      mockResumeModel.findByIdAndUpdate.mockResolvedValue(plainStored);
+
+      await service.update(
+        'r1',
+        { selfEvaluation: { content: '新内容', globalSort: 1 } } as any,
+        userId,
+      );
+
+      const payload = mockResumeModel.findByIdAndUpdate.mock.calls[0][1];
+      // 不应同时存在 selfEvaluation 与 selfEvaluation.globalSort（MongoDB 路径冲突）
+      expect(Object.keys(payload)).not.toContain('selfEvaluation.globalSort');
+      expect(payload.selfEvaluation).toEqual({
+        content: '新内容',
+        globalSort: 2,
+      });
+      expect(payload.workExperience).toEqual([
+        { companyName: 'W1', globalSort: 1, localSort: 1 },
+      ]);
+      expect(payload.updatedAt).toEqual(expect.any(Date));
+    });
+
+    it('MongoDB 返回路径冲突错误时转换为可读的业务异常', async () => {
+      const plainStored = {
+        _id: 'r1',
+        userId,
+        isTemplate: false,
+        selfEvaluation: { content: '旧内容', globalSort: 1 },
+        workExperience: [{ companyName: 'W1', globalSort: 1, localSort: 1 }],
+      };
+      mockResumeModel.findOne.mockResolvedValue({
+        ...plainStored,
+        toObject: () => ({ ...plainStored }),
+      });
+      // 模拟驱动层仍出现同类路径冲突（兜底分支）
+      mockResumeModel.findByIdAndUpdate.mockRejectedValue(
+        Object.assign(
+          new Error(
+            "Updating the path 'selfEvaluation' would create a conflict at 'selfEvaluation'",
+          ),
+          { name: 'MongoServerError', code: 40 },
+        ),
+      );
+
+      await expect(
+        service.update(
+          'r1',
+          { selfEvaluation: { content: '新内容', globalSort: 1 } } as any,
+          userId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('排序值本已唯一时原样保存，不追加任何排序字段（幂等）', async () => {
       const plainStored = {
         _id: 'r1',

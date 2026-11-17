@@ -255,6 +255,68 @@ export class ResumeService implements OnModuleDestroy {
     return repaired ?? resume;
   }
 
+  /**
+   * 合并"本次提交数据 + 排序修复载荷"
+   *
+   * 排序修复载荷对对象模块（skills/certificates/selfEvaluation）产出的是
+   * `field.globalSort` 点号键，而同一请求的提交数据中往往已带 `field` 对象。
+   * MongoDB 不允许同一次更新同时包含父路径与子路径，否则抛出
+   * MongoServerError: Updating the path 'x' would create a conflict at 'x'。
+   * 因此父字段已提交时把点号键折叠进该对象（保留本次提交内容并修正排序值），
+   * 父字段未提交时才沿用点号键，避免整体替换丢失库中其它字段。
+   *
+   * @param payload 本次提交的更新数据（DTO）
+   * @param repair 排序修复载荷（可能含点号键）
+   * @returns 无父/子路径冲突的更新数据
+   */
+  private mergeSortRepairIntoPayload(
+    payload: Record<string, any>,
+    repair: Record<string, any>,
+  ): Record<string, any> {
+    const merged: Record<string, any> = { ...payload };
+
+    for (const [path, value] of Object.entries(repair)) {
+      const [root, ...rest] = path.split('.');
+      if (!rest.length) {
+        merged[path] = value;
+        continue;
+      }
+
+      const rootValue = merged[root];
+      if (rootValue === undefined) {
+        // 父字段未提交：保留点号键，仅更新排序字段
+        merged[path] = value;
+      } else if (
+        rootValue &&
+        typeof rootValue === 'object' &&
+        !Array.isArray(rootValue)
+      ) {
+        // 父字段已提交：折叠为对象字段，避免父/子路径同时出现
+        merged[root] = { ...rootValue, [rest.join('.')]: value };
+      } else {
+        // 父字段已提交但非对象（如旧格式字符串）：以提交数据为准，丢弃该修复项
+        this.logger.warn(
+          `更新载荷字段 ${root} 与排序修复路径 ${path} 冲突，已跳过该排序修复`,
+        );
+      }
+    }
+
+    return merged;
+  }
+
+  /**
+   * 判断是否为 MongoDB 更新路径冲突
+   * （同一次更新文档中同时出现父路径与子路径时由驱动抛出）
+   */
+  private isMongoPathConflictError(error: unknown): boolean {
+    const err = error as { name?: string; message?: string } | null;
+    return (
+      err?.name === 'MongoServerError' &&
+      typeof err.message === 'string' &&
+      err.message.includes('would create a conflict')
+    );
+  }
+
   private getContent(html: string, css: string) {
     // 前端传来的 css 已自包含全部所需样式（构建时编译的 Tailwind 产物）。
     // 禁止在此注入 @tailwindcss/browser 等运行时：v4 运行时会注册
@@ -580,17 +642,36 @@ export class ResumeService implements OnModuleDestroy {
       );
     }
 
-    const updatedResume = await this.resumeModel.findByIdAndUpdate(
-      id,
-      {
-        ...enrichedDto,
-        ...sortRepair,
-        updatedAt: new Date(),
-      },
-      {
-        new: true,
-      },
+    // 提交数据与排序修复载荷可能存在父/子路径重叠（如 selfEvaluation 与
+    // selfEvaluation.globalSort），必须先折叠，否则 MongoDB 直接报路径冲突
+    const updatePayload = this.mergeSortRepairIntoPayload(
+      { ...enrichedDto },
+      sortRepair,
     );
+
+    let updatedResume: ResumeDocument | null = null;
+    try {
+      updatedResume = await this.resumeModel.findByIdAndUpdate(
+        id,
+        {
+          ...updatePayload,
+          updatedAt: new Date(),
+        },
+        {
+          new: true,
+        },
+      );
+    } catch (error) {
+      // 兜底：驱动层仍抛出路径冲突时，记录上下文并转换为可读的业务异常
+      if (this.isMongoPathConflictError(error)) {
+        this.logger.error(
+          `用户 ${userId} 更新简历 ${id} 失败：更新路径冲突 ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+        throw new BadRequestException('简历数据存在更新冲突，请刷新后重试');
+      }
+      throw error;
+    }
 
     this.logger.log(`用户 ${userId} 成功更新简历 ${id}`);
     return updatedResume;
